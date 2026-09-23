@@ -480,6 +480,15 @@ printf "%s" "$admin_groups_filtered" | grep -q "Test Group 1"
 admin_cameras_form="$(curl -fsS -b "$COOKIE_JAR" "http://127.0.0.1:$PORT/admin/cameras?edit=1")"
 printf "%s" "$admin_cameras_form" | grep -q "Изменить камеру"
 printf "%s" "$admin_cameras_form" | grep -F -q 'href="/admin/cameras">Новая камера</a>'
+# Edit form layout: fields in the left column, live preview as a separate card on the right (10s refresh, links to the player).
+printf "%s" "$admin_cameras_form" | grep -F -q 'class="camera-edit-layout"'
+printf "%s" "$admin_cameras_form" | grep -F -q 'class="camera-edit-form-col"'
+printf "%s" "$admin_cameras_form" | grep -F -q 'class="camera-edit-preview-card"'
+printf "%s" "$admin_cameras_form" | grep -F -q 'class="preview camera-edit-preview is-loading" href="/viewer/player?id=1"'
+printf "%s" "$admin_cameras_form" | grep -F -q 'data-preview-src="/viewer/preview?id=1" data-preview-refresh="10" data-preview-refresh-ms="10000"'
+printf "%s" "$admin_cameras_form" | grep -F -q 'class="preview-spinner"'
+# Preview card must follow the form (submit button), not precede the first field.
+php -r '$h = stream_get_contents(STDIN); $save = strpos($h, "Сохранить и синхронизировать"); $card = strpos($h, "camera-edit-preview-card"); $title = strpos($h, "Название потока"); exit($save !== false && $card !== false && $save < $card && $title !== false && $title < $card ? 0 : 1);' <<<"$admin_cameras_form"
 printf "%s" "$admin_cameras_form" | grep -q "Название потока"
 printf "%s" "$admin_cameras_form" | grep -q "Техническое имя потока"
 printf "%s" "$admin_cameras_form" | grep -F -q 'name="dvr_control_mode" data-camera-mode-select'
@@ -518,6 +527,7 @@ admin_cameras_back_form="$(curl -fsS -b "$COOKIE_JAR" "http://127.0.0.1:$PORT/ad
 printf "%s" "$admin_cameras_back_form" | grep -F -q 'href="/viewer/player?id=1&amp;back=%2F%3Fcols%3D6">Назад</a>'
 admin_cameras_new_form="$(curl -fsS -b "$COOKIE_JAR" "http://127.0.0.1:$PORT/admin/cameras")"
 printf "%s" "$admin_cameras_new_form" | grep -F -q 'data-watermark-dependent hidden'
+! printf "%s" "$admin_cameras_new_form" | grep -q 'camera-edit-preview'
 printf "%s" "$admin_cameras_new_form" | grep -F -q '<option value="auto" selected>автоматический случайный</option>'
 printf "%s" "$admin_cameras_new_form" | grep -F -q 'href="/admin/cameras/import">Импорт с DVR</a>'
 admin_camera_import="$(curl -fsS -b "$COOKIE_JAR" "http://127.0.0.1:$PORT/admin/cameras/import?server_id=3")"
@@ -607,7 +617,7 @@ printf "%s" "$events_frame_headers" | grep -i "Content-Type: image/jpeg"
 # Use server 3 (fake Import DVR) before it gets blocked below.
 onvif_delete_cam="$(
   curl -fsS -b "$COOKIE_JAR" -H 'Content-Type: application/json' \
-    -d '{"displayName":"ONVIF Delete Cam","sourceUrl":"rtsp://example.invalid/onvif-del","serverId":3,"dvrStreamName":"onvif-del-cam","onvifHost":"10.0.0.42","onvifPort":80,"onvifUsername":"admin","onvifPassword":"'"$ONVIF_PW"'"}' \
+    -d '{"displayName":"ONVIF Delete Cam","sourceUrl":"rtsp://example.invalid/onvif-del","serverId":3,"dvrStreamName":"onvif-del-cam","retentionDays":"3d","onvifHost":"10.0.0.42","onvifPort":80,"onvifUsername":"admin","onvifPassword":"'"$ONVIF_PW"'"}' \
     "http://127.0.0.1:$PORT/api/portal/v1/cameras"
 )"
 printf "%s" "$onvif_delete_cam" | grep -q '"dvrStreamName": "onvif-del-cam"'
@@ -617,6 +627,8 @@ test -n "$onvif_delete_id"
 onvif_devices_list="$(curl -fsS -H "X-Management-Token: $MGMT_IMPORT" "http://127.0.0.1:$DVR_PORT/api/onvif/devices")"
 printf "%s" "$onvif_devices_list" | grep -q '"id":"onvif-del-cam"'
 printf "%s" "$onvif_devices_list" | grep -q '"sourceStreams":\["onvif-del-cam"\]'
+# ONVIF events retention must mirror the camera archive retention (3d -> 3 days).
+printf "%s" "$onvif_devices_list" | grep -q '"eventsRetentionDays":3'
 # Delete the camera with DVR purge; portal must DELETE both stream and ONVIF device.
 onvif_delete_status="$(
   curl -sS -o /dev/null -w '%{http_code}' -b "$COOKIE_JAR" \
@@ -1866,6 +1878,90 @@ test "$ext_token" = "$ext_token2"
 # The returned token works against the JSON API
 ext_me="$(curl -fsS -H "Authorization: Bearer $ext_token" "http://127.0.0.1:$PORT/api/portal/v1/me")"
 printf "%s" "$ext_me" | grep -q "\"login\": \"$callback_user_login\""
+
+# Billing: block/unblock a group by its billing_id (external_app_key auth)
+api_billing_group="$(
+  curl -fsS -b "$COOKIE_JAR" -H 'Content-Type: application/json' \
+    -d '{"name":"API Billing Group","billingId":"smoke-billing-group-1"}' \
+    "http://127.0.0.1:$PORT/api/portal/v1/groups"
+)"
+api_billing_group_id="$(printf "%s" "$api_billing_group" | php -r '$d=json_decode(stream_get_contents(STDIN), true); echo $d["group"]["id"] ?? "";')"
+test -n "$api_billing_group_id"
+printf "%s" "$api_billing_group" | grep -q '"billingId": "smoke-billing-group-1"'
+# billingId must be unique
+api_billing_dup_status="$(
+  curl -sS -o "$STATE_DIR/api_billing_dup.json" -w '%{http_code}' -b "$COOKIE_JAR" -H 'Content-Type: application/json' \
+    -d '{"name":"API Billing Dup","billingId":"smoke-billing-group-1"}' \
+    "http://127.0.0.1:$PORT/api/portal/v1/groups"
+)"
+test "$api_billing_dup_status" = "409"
+grep -q '"code": "billing_id_exists"' "$STATE_DIR/api_billing_dup.json"
+# Admin groups edit page renders the billing id field
+api_billing_page="$(curl -fsS -b "$COOKIE_JAR" "http://127.0.0.1:$PORT/admin/groups?edit=$api_billing_group_id&lang=ru")"
+printf "%s" "$api_billing_page" | grep -q 'name="billing_id"'
+printf "%s" "$api_billing_page" | grep -q 'smoke-billing-group-1'
+# Endpoint requires POST even before key validation
+billing_wrong_method="$(curl -sS -o /dev/null -w '%{http_code}' -H 'X-App-Key: smoke-external-app-key' \
+  "http://127.0.0.1:$PORT/api/portal/v1/billing/groups/block")"
+test "$billing_wrong_method" = "405"
+# Missing key -> 401
+billing_missing_key="$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+  -d '{"billingId":"smoke-billing-group-1","blocked":true}' \
+  "http://127.0.0.1:$PORT/api/portal/v1/billing/groups/block")"
+test "$billing_missing_key" = "401"
+# Wrong key -> 401
+billing_wrong_key="$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H 'X-App-Key: wrong-key' \
+  -d '{"billingId":"smoke-billing-group-1","blocked":true}' \
+  "http://127.0.0.1:$PORT/api/portal/v1/billing/groups/block")"
+test "$billing_wrong_key" = "401"
+# Missing billingId -> 422; unknown billingId -> 404
+billing_missing_id="$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H 'X-App-Key: smoke-external-app-key' \
+  -d '{"blocked":true}' \
+  "http://127.0.0.1:$PORT/api/portal/v1/billing/groups/block")"
+test "$billing_missing_id" = "422"
+billing_unknown_id="$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H 'X-App-Key: smoke-external-app-key' \
+  -d '{"billingId":"smoke-billing-group-does-not-exist","blocked":true}' \
+  "http://127.0.0.1:$PORT/api/portal/v1/billing/groups/block")"
+test "$billing_unknown_id" = "404"
+# Missing blocked field -> 422
+billing_missing_blocked="$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H 'X-App-Key: smoke-external-app-key' \
+  -d '{"billingId":"smoke-billing-group-1"}' \
+  "http://127.0.0.1:$PORT/api/portal/v1/billing/groups/block")"
+test "$billing_missing_blocked" = "422"
+# Valid block -> group becomes blocked
+billing_block="$(curl -fsS -X POST -H 'Content-Type: application/json' -H 'X-App-Key: smoke-external-app-key' \
+  -d '{"billingId":"smoke-billing-group-1","blocked":true}' \
+  "http://127.0.0.1:$PORT/api/portal/v1/billing/groups/block")"
+printf "%s" "$billing_block" | grep -q '"ok": true'
+printf "%s" "$billing_block" | grep -q '"blocked": true'
+curl -fsS -b "$COOKIE_JAR" "http://127.0.0.1:$PORT/api/portal/v1/groups/$api_billing_group_id" | grep -q '"blocked": true'
+# Valid unblock -> group returns to active
+billing_unblock="$(
+  curl -fsS -X POST -H 'Content-Type: application/json' -H 'X-App-Key: smoke-external-app-key' \
+    -d '{"billingId":"smoke-billing-group-1","blocked":false}' \
+    "http://127.0.0.1:$PORT/api/portal/v1/billing/groups/block"
+)"
+printf "%s" "$billing_unblock" | grep -q '"blocked": false'
+curl -fsS -b "$COOKIE_JAR" "http://127.0.0.1:$PORT/api/portal/v1/groups/$api_billing_group_id" | grep -q '"blocked": false'
+# Blocking is idempotent (blocking already-blocked group still returns ok)
+curl -fsS -X POST -H 'Content-Type: application/json' -H 'X-App-Key: smoke-external-app-key' \
+  -d '{"billingId":"smoke-billing-group-1","blocked":true}' \
+  "http://127.0.0.1:$PORT/api/portal/v1/billing/groups/block" >/dev/null
+curl -fsS -X POST -H 'Content-Type: application/json' -H 'X-App-Key: smoke-external-app-key' \
+  -d '{"billingId":"smoke-billing-group-1","blocked":true}' \
+  "http://127.0.0.1:$PORT/api/portal/v1/billing/groups/block" | grep -q '"ok": true'
+billing_audit="$(
+  php <<'PHP'
+<?php
+require getenv('ROOT') . '/app/Portal.php';
+$rows = \SesamePortal\DB::pdo()->query("SELECT action || ' ' || details FROM audit_logs WHERE action = 'group.billing_block' ORDER BY id")->fetchAll(PDO::FETCH_COLUMN);
+echo implode("\n", $rows);
+PHP
+)"
+grep -q "billing_id=smoke-billing-group-1" <<<"$billing_audit"
+# Cleanup billing test group
+curl -fsS -b "$COOKIE_JAR" -X DELETE "http://127.0.0.1:$PORT/api/portal/v1/groups/$api_billing_group_id" | grep -q '"ok": true'
+
 # Cleanup: revoke the issued static token and disable integration
 ext_cleanup_output="$(
   L="$callback_user_login" php <<'PHP'

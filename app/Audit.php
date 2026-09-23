@@ -35,4 +35,25 @@ final class Audit
         $value = preg_replace('/\s+/', ' ', trim($value)) ?: '';
         return mb_strcut($value, 0, $maxBytes, 'UTF-8');
     }
+
+    public static function fileAppend(string $category, string $line): void
+    {
+        $category = preg_replace('/[^a-z0-9_.-]+/i', '-', $category) ?: 'portal';
+        $dir = rtrim(Config::stateDir(), '/') . '/logs';
+        if (!is_dir($dir) && !@mkdir($dir, 0770, true) && !is_dir($dir)) {
+            return;
+        }
+        $timezone = (string)Config::get('timezone', 'UTC');
+        $dt = new \DateTimeImmutable('now', new \DateTimeZone($timezone));
+        $path = $dir . '/' . $category . '-' . $dt->format('Y-m-d') . '.log';
+        @file_put_contents($path, '[' . $dt->format('c') . '] ' . $line . "\n", FILE_APPEND | LOCK_EX);
+
+        $days = max(1, (int)Config::get('log_retention_days', 3));
+        $cutoff = time() - $days * 86400;
+        foreach ((array)glob($dir . '/' . $category . '-*.log') as $old) {
+            if (is_file($old) && filemtime($old) < $cutoff && strpos($old, $dir . '/') === 0) {
+                @unlink($old);
+            }
+        }
+    }
 }

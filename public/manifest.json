@@ -1,6 +1,6 @@
 {
-  "name": "SesamePortal",
-  "short_name": "SesamePortal",
+  "name": "Портал Артел МиК",
+  "short_name": "Портал Артел МиК",
   "description": "Портал видеонаблюдения",
   "start_url": "/",
   "scope": "/",

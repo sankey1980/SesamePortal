@@ -61,7 +61,7 @@ final class Config
             'smtp_password' => getenv('SESAME_PORTAL_SMTP_PASSWORD') ?: '',
             'smtp_security' => getenv('SESAME_PORTAL_SMTP_SECURITY') ?: 'ssl',
             'smtp_from_email' => getenv('SESAME_PORTAL_SMTP_FROM_EMAIL') ?: '',
-            'smtp_from_name' => getenv('SESAME_PORTAL_SMTP_FROM_NAME') ?: 'SesamePortal',
+            'smtp_from_name' => getenv('SESAME_PORTAL_SMTP_FROM_NAME') ?: 'Портал Артел МиК',
         ], is_array($loaded) ? $loaded : []);
 
         if (empty($config['crypto_keys']) || !is_array($config['crypto_keys'])) {

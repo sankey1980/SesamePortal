@@ -16,6 +16,7 @@ set -euo pipefail
 
 PORT=8080
 HOST=0.0.0.0
+WORKERS=16
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PUBLIC="$ROOT/public"
 PID_FILE="/tmp/sesame-portal.pid"
@@ -106,13 +107,13 @@ cmd_start() {
 
     if [[ "${1:-}" == "-f" ]]; then
         # Передний план — блокирует терминал, логи в stdout/stderr
-        echo "portal: запускаю на переднем плане (0.0.0.0:$PORT) ..."
-        exec php -S "$HOST:$PORT" -t "$PUBLIC"
+        echo "portal: запускаю на переднем плане (0.0.0.0:$PORT, $WORKERS воркеров) ..."
+        exec env PHP_CLI_SERVER_WORKERS="$WORKERS" php -S "$HOST:$PORT" -t "$PUBLIC"
     fi
 
     # Фоновый запуск через setsid — переживает закрытие терминала
-    echo "portal: запускаю dev-сервер (0.0.0.0:$PORT, лог → $LOG_FILE) ..."
-    setsid php -S "$HOST:$PORT" -t "$PUBLIC" </dev/null >>"$LOG_FILE" 2>&1 &
+    echo "portal: запускаю dev-сервер (0.0.0.0:$PORT, $WORKERS воркеров, лог → $LOG_FILE) ..."
+    setsid env PHP_CLI_SERVER_WORKERS="$WORKERS" php -S "$HOST:$PORT" -t "$PUBLIC" </dev/null >>"$LOG_FILE" 2>&1 &
     local pid=$!
     echo "$pid" > "$PID_FILE"
 

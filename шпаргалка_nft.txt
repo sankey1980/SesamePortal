@@ -1,0 +1,624 @@
+================================================================================
+                        ШПАРГАЛКА ПО NFTABLES
+================================================================================
+
+СОДЕРЖАНИЕ:
+  1.  Концепция и архитектура
+  2.  Семейства (families)
+  3.  Приоритеты хуков
+  4.  Управление правилами (просмотр, создание, удаление)
+  5.  Структура правила (выражения + verdict)
+  6.  Выражения — критерии отбора пакетов
+  7.  Verdicts (решения)
+  8.  NAT (SNAT, DNAT, Masquerade, Redirect)
+  9.  Sets и Maps (множества и словари)
+  10. Пользовательские цепочки
+  11. Логирование
+  12. Счётчики, квоты, connlimit
+  13. Полный пример конфига
+  14. Полезные команды
+  15. Миграция с iptables
+  16. Типичные сценарии
+  17. Отличия от iptables
+
+================================================================================
+1. КОНЦЕПЦИЯ И АРХИТЕКТУРА
+================================================================================
+
+nftables — современная замена iptables/ip6tables/arptables/ebtables.
+Работает в ядре Linux (>=3.13, полноценно >=4.1), конфигурируется через `nft`.
+
+Иерархия объектов:
+  ruleset
+    └── table (таблица)           — контейнер для цепочек, принадлежит семейству
+         ├── chain (цепочка)      — последовательность правил, привязана к hook'у
+         │    ├── rule (правило)  — условие + verdict (решение)
+         │    └── set (множество) — именованный набор значений (IP, порты)
+         └── set / map / counter / quota / ct timeout ...
+
+================================================================================
+2. СЕМЕЙСТВА (FAMILIES)
+================================================================================
+
+Семейство   | Хуки                                          | Назначение
+------------|-----------------------------------------------|-------------------------
+ip          | prerouting, input, forward, output, postrouting| Только IPv4 (аналог iptables)
+ip6         | те же                                          | Только IPv6 (аналог ip6tables)
+inet        | те же                                          | IPv4 + IPv6 одновременно (РЕКОМЕНДУЕТСЯ)
+arp         | input, output                                  | ARP-пакеты (аналог arptables)
+bridge      | те же + type filter                            | Трафик через мост (аналог ebtables)
+netdev      | ingress                                        | Самый ранний перехват — при поступлении на интерфейс
+
+================================================================================
+3. ПРИОРИТЕТЫ ХУКОВ (priority)
+================================================================================
+
+Чем меньше число — тем раньше срабатывает цепочка.
+
+Значение | Имя          | Когда применяется
+---------|--------------|---------------------------------------------------
+ -300    | raw          | До conntrack. Для marking, notrack.
+ -200    | mangle (pre) | Раннее изменение заголовков.
+ -150    | mangle(post) | Нормализация пакетов (TOS, TTL).
+ -100    | nat (dest)   | DNAT, перенаправление портов.
+    0    | filter       | Основная фильтрация (input/forward/output).
+   50    | security     | SELinux метки.
+  100    | nat (source) | SNAT, masquerade.
+  300    | last         | После всего.
+
+Можно использовать именованные константы: priority filter, priority mangle,
+priority srcnat, priority dstnat, priority raw.
+
+================================================================================
+4. УПРАВЛЕНИЕ ПРАВИЛАМИ
+================================================================================
+
+--- Просмотр ---
+
+  nft list ruleset                     # все правила во всех таблицах
+  nft list table inet filter            # конкретная таблица
+  nft list chain inet filter input      # конкретная цепочка
+  nft -a list ruleset                   # с handle (адресами для удаления)
+  nft list ruleset -y                   # JSON-формат
+
+--- Создание/удаление таблиц и цепочек ---
+
+  nft add table inet filter             # создать таблицу
+  nft delete table inet filter          # удалить таблицу (со всем содержимым)
+  nft flush table inet filter           # очистить правила в таблице
+  nft flush ruleset                     # очистить ВСЁ
+
+  # Базовая цепочка (вызывается ядром через hook):
+  nft add chain inet filter input '{ type filter hook input priority 0; policy drop; }'
+
+  # Пользовательская цепочка (без хука, вызывается через jump):
+  nft add chain inet filter my_chain
+  nft delete chain inet filter my_chain
+
+--- Операции с правилами ---
+
+  nft add rule inet filter input tcp dport 22 accept          # добавить в конец
+  nft insert rule inet filter input position 10 tcp dport 80 accept  # вставить перед поз.10
+  nft replace rule inet filter input handle 12 tcp dport 443 accept  # заменить по handle
+  nft delete rule inet filter input handle 12                # удалить по handle
+  nft flush chain inet filter input                           # очистить цепочку
+
+--- Загрузка из файла ---
+
+  nft -f /etc/nftables.conf             # применить конфиг
+  nft -c -f /etc/nftables.conf          # проверить синтаксис БЕЗ применения (dry-run)
+  nft -f -                              # читать из stdin
+
+Файл начинается с шебанга: #!/usr/sbin/nft -f
+
+================================================================================
+5. СТРУКТУРА ПРАВИЛА
+================================================================================
+
+Каждое правило: выражения (условия) + verdict (решение).
+
+  nft add rule <семейство> <таблица> <цепочка> [выражения...] [verdict]
+
+Базовая цепочка объявляется с хуком, приоритетом и политикой:
+
+  chain input {
+      type filter hook input priority 0; policy drop;
+      # правила
+  }
+
+policy — применяется, если ни одно правило не вынесло verdict:
+  policy drop   — всё запрещено, разрешаем явно (РЕКОМЕНДУЕТСЯ, fail-closed)
+  policy accept — всё разрешено, запрещаем явно
+
+================================================================================
+6. ВЫРАЖЕНИЯ — КРИТЕРИИ ОТБОРА ПАКЕТОВ
+================================================================================
+
+--- Интерфейсы ---
+
+  iifname "eth0"           # входящий интерфейс (по имени)
+  oifname "eth0"           # исходящий интерфейс (по имени)
+  iif eth0                 # по индексу (быстрее, индекс не меняется при rename)
+  oif eth0                 # по индексу
+  iifname "eth*"           # glob-шаблоны supported
+
+--- IPv4 / IPv6 адреса ---
+
+  ip saddr 192.168.1.10                    # source IP
+  ip daddr 192.168.1.10                    # destination IP
+  ip saddr 192.168.0.0/24                  # подсеть
+  ip saddr 192.168.0.0-192.168.0.255       # диапазон
+  ip saddr { 10.0.0.1, 10.0.0.2, 10.0.0.3 } # множество
+  ip saddr != 10.0.0.1                     # НЕ этот IP
+
+  ip6 saddr ::1/128                       # IPv6 loopback
+  ip6 saddr fe80::/10                     # link-local
+  ip6 daddr 2001:db8::1                   # конкретный IPv6
+
+  meta nfproto ipv4                       # только IPv4 (в inet-таблицах)
+  meta nfproto ipv6                       # только IPv6 (в inet-таблицах)
+
+--- Протоколы и порты ---
+
+  ip protocol tcp                         # протокол L4
+  ip protocol { tcp, udp }
+  meta l4proto tcp                        # эквивалент, работает и для IPv6
+
+  tcp dport 22                            # destination port
+  tcp dport { 22, 80, 443 }               # множество портов
+  tcp dport 8080-8090                     # диапазон
+  tcp sport 1024-65535                    # source port
+  udp dport 53                            # DNS
+  icmp type echo-request                  # ping
+  icmpv6 type { echo-request, nd-neighbor-solicit,
+                nd-neighbor-advert, nd-router-advert }
+
+--- Conntrack (отслеживание соединений) ---
+
+  Состояние     | Описание
+  --------------|----------------------------------------------------------
+  new           | Новый пакет, инициирующий соединение
+  established    | Пакет в рамках уже установленного соединения
+  related        | Связан с существующим (FTP data, ICMP error)
+  invalid        | Не соответствует ни одному соединению (битые/неуместные)
+  synproxy       | TCP SYN proxy (защита от SYN flood)
+
+  ct state established,related accept    # пропускать ответы на исходящие
+  ct state invalid drop                  # отбрасывать мусор
+  ct state new tcp dport 22 accept       # только новые SSH-соединения
+  ct status dnat                         # пакет прошёл DNAT
+  ct original saddr 192.168.1.0/24       # оригинальный адрес (до NAT)
+
+--- Ограничение скорости (rate limiting) ---
+
+  limit rate 10/minute accept             # 10 пакетов в минуту
+  limit rate 10/minute burst 5 packets accept  # с burst
+  limit rate over 10 mbytes/second drop   # лимит по байтам
+  # для логирования с лимитом:
+  limit rate 5/minute log prefix "SSH-BRUTE: " drop
+
+--- Время ---
+
+  meta hour 9-17 meta day 1-5 accept      # рабочие часы пн-пт 9:00-18:00
+  time 09:00-18:00 accept                 # альтернативная запись
+
+--- Meta-данные ---
+
+  meta iifname   | имя входящего интерфейса
+  meta oifname   | имя исходящего интерфейса
+  meta iif       | индекс входящего интерфейса
+  meta oif       | индекс исходящего интерфейса
+  meta l4proto   | протокол L4
+  meta nfproto   | семейство (IPv4/IPv6)
+  meta length    | длина пакета
+  meta skuid     | UID владельца сокета (для output)
+  meta skgid     | GID владельца сокета
+  meta mark      | метка пакета (fwmark)
+  meta priority  | приоритет (TC)
+  meta protocol  | ethertype
+  meta hour      | время суток
+  meta day       | день недели (1=понедельник)
+
+--- Mark (метки пакетов) ---
+
+  meta mark set 0x1                       # установить метку
+  meta mark 0x1                           # проверить метку
+  meta mark and 0xff == 0x1               # побитовая маска
+
+================================================================================
+7. VERDICTS (РЕШЕНИЯ)
+================================================================================
+
+Verdict    | Описание
+-----------|--------------------------------------------------------------
+accept     | Принять. Пакет продолжает путь по стеку.
+drop       | Молча отбросить. Отправитель не уведомляется (безопаснее).
+reject     | Отбросить с уведомлением: reject with icmp type port-unreachable
+           |   reject with tcp reset
+queue      | Передать в userspace (libnetfilter_queue) для обработки
+continue   | Продолжить обработку следующих правил (не финальное)
+return     | Вернуться из пользовательской цепочки в точку вызова (jump)
+jump <chain>| Перейти в пользовательскую цепочку, ПОСЛЕ — вернуться обратно
+goto <chain>| Перейти в цепочку БЕЗ возврата (verdict становится финальным)
+
+--- jump vs goto (ключевое отличие) ---
+
+  chain input {
+      tcp dport 80 jump web_rules     # после web_rules ВЕРНЁТСЯ сюда
+      tcp dport 443 goto web_rules    # после web_rules НЕ вернётся
+  }
+  chain web_rules {
+      accept    # при jump: вернётся в input, продолжит проверку
+                # при goto: пакет принят окончательно
+  }
+
+================================================================================
+8. NAT (Network Address Translation)
+================================================================================
+
+Тип NAT     | Хук         | Что делает
+------------|-------------|------------------------------------------------------
+SNAT        | postrouting | Меняет source IP исходящих (выход в интернет)
+DNAT        | prerouting  | Меняет destination IP входящих (port forwarding)
+Masquerade  | postrouting | Авто-SNAT: берёт IP интерфейса (для DHCP)
+Redirect    | prerouting  | Перенаправление на локальный хост
+
+--- Примеры ---
+
+  table ip nat {
+      # Masquerade — выход в интернет
+      chain postrouting {
+          type nat hook postrouting priority 100; policy accept;
+          oifname "eth0" masquerade
+          # явный SNAT:
+          # oifname "eth0" ip saddr 192.168.1.0/24 snat to 203.0.113.1
+          # с диапазоном портов:
+          # snat to 203.0.113.1-203.0.113.5:2048-32768
+      }
+
+      # Port forwarding — DNAT
+      chain prerouting {
+          type nat hook prerouting priority -100; policy accept;
+          iifname "eth0" tcp dport 80 dnat to 192.168.1.100:80
+          # перенаправление на локальный порт:
+          # tcp dport 80 redirect to 8080
+      }
+  }
+
+Важно: для DNAT нужна цепочка forward в filter, разрешающая транзит:
+  iifname "eth0" oifname "eth1" ip daddr 192.168.1.100 tcp dport 80 accept
+
+Для IPv6 используйте table ip6 nat { ... }
+
+================================================================================
+9. SETS И MAPS (МНОЖЕСТВА И СЛОВАРИ)
+================================================================================
+
+--- Sets — именованные наборы значений ---
+
+  table inet filter {
+      # Статичный set
+      set admin_ips { type ipv4_addr; elements = { 10.0.0.1, 10.0.0.2 } }
+
+      # Динамический set с авто-таймаутом (для blacklist)
+      set blacklist {
+          type ipv4_addr
+          flags timeout
+          timeout 1h
+          size 10000
+      }
+
+      # Set с подсетями
+      set blocked_nets {
+          type ipv4_addr
+          flags interval
+          elements = { 10.0.0.0/8, 172.16.0.0/12 }
+      }
+
+      chain input {
+          type filter hook input priority 0; policy drop;
+          ip saddr @admin_ips tcp dport 22 accept        # IP в списке
+          ip saddr @blacklist drop                         # IP в чёрном списке
+          # динамическое добавление в blacklist:
+          tcp dport 22 add @blacklist { ip saddr timeout 1h } drop
+      }
+  }
+
+Управление через CLI:
+  nft add element inet filter blacklist { 5.6.7.8 timeout 2h }
+  nft delete element inet filter blacklist { 5.6.7.8 }
+  nft flush set inet filter blacklist
+
+--- Maps — словари (ключ -> значение) ---
+
+  map port_to_ip {
+      type inet_service : ipv4_addr
+      elements = { 80 : 192.168.1.100, 443 : 192.168.1.101 }
+  }
+  # использование:
+  iifname "eth0" tcp dport 80 dnat to map port_to_ip : tcp dport
+
+--- Типы данных ---
+
+  ipv4_addr           | IPv4 адрес
+  ipv6_addr           | IPv6 адрес
+  inet_service         | Порт (0-65535)
+  ifindex             | Индекс интерфейса
+  ether_addr          | MAC-адрес
+  ipv4_addr . ipv4_addr | Кортеж (составной ключ)
+  inet_service . ipv4_addr | Порт + IP
+
+--- Флаги sets ---
+
+  timeout    | Записи автоматически удаляются по таймауту
+  interval   | Поддержка диапазонов/подсетей (10.0.0.0/24)
+  constant   | Размер фиксирован, нельзя изменять
+  dynamic    | Можно добавлять/удалять из правил
+
+================================================================================
+10. ПОЛЬЗОВАТЕЛЬСКИЕ ЦЕПОЧКИ (под-цепочки)
+================================================================================
+
+Позволяют структурировать правила и переиспользовать логику.
+
+  table inet filter {
+      chain input {
+          type filter hook input priority 0; policy drop;
+          iifname "lo" accept
+          ct state established,related accept
+          jump drop_log                # всё остальное -> лог+дроп
+      }
+      chain drop_log {
+          log prefix "NFT-DROP: " level warn
+          limit rate 10/minute counter drop
+      }
+  }
+
+================================================================================
+11. ЛОГИРОВАНИЕ
+================================================================================
+
+  log prefix "NFT: " level warn drop                    # базовое логирование
+  log prefix "SSH: " level warn limit rate 5/minute    # с лимитом
+  log flags all prefix "FULL: "                        # полный лог (опции TCP)
+  log flags skuid prefix "USER: "                      # с UID процесса
+  counter log prefix "COUNT: " drop                    # счётчик + лог + дроп
+
+Уровни: emerg, alert, crit, err, warn, notice, info, debug
+Логи попадают в kernel log: dmesg, journalctl -k
+
+================================================================================
+12. СЧЁТЧИКИ, КВОТЫ, CONNLIMIT
+================================================================================
+
+--- Counter (счётчик пакетов/байтов) ---
+
+  tcp dport 80 counter accept          # inline-счётчик
+  nft list ruleset                     # посмотреть значения (packets, bytes)
+  # именованный счётчик:
+  counter my_counter { packets 0 bytes 0 }
+  tcp dport 80 counter name "my_counter" accept
+
+--- Quota (квота трафика) ---
+
+  quota 10 gb accept                    # ограничить до 10 GB, затем дропать
+  quota over 10 gb drop                 # дропать пока не превышено
+
+--- Connlimit (ограничение одновременных соединений) ---
+
+  ct state new tcp dport 22 ct count 10 accept   # не более 10 SSH с одного IP
+
+--- Meter (динамическая таблица для rate limit per IP) ---
+
+  tcp dport 22 meter ssh_conns { ip saddr limit rate 3/minute } accept
+
+================================================================================
+13. ПОЛНЫЙ ПРИМЕР КОНФИГА /etc/nftables.conf
+================================================================================
+
+#!/usr/sbin/nft -f
+
+flush ruleset
+
+# ===== Таблица фильтрации =====
+table inet filter {
+    set blacklist {
+        type ipv4_addr
+        flags timeout, interval
+        timeout 1h
+        size 10000
+    }
+    set admin_ips {
+        type ipv4_addr
+        elements = { 10.0.0.1, 10.0.0.2 }
+    }
+
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        iifname "lo" accept
+        ct state established,related accept
+        ct state invalid drop
+
+        ip saddr @blacklist drop
+
+        # ICMP (ping) с лимитом
+        ip protocol icmp limit rate 10/second accept
+        meta nfproto ipv6 icmpv6 type { echo-request, echo-reply,
+            nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert } accept
+
+        # SSH: админам — без лимита, остальным — rate limit + bruteforce защита
+        ip saddr @admin_ips tcp dport 22 accept
+        tcp dport 22 meter ssh_conns { ip saddr limit rate 3/minute } accept
+        tcp dport 22 add @blacklist { ip saddr timeout 1h } log prefix "SSH-BRUTE: " drop
+
+        # Веб-сервер
+        tcp dport { 80, 443 } counter accept
+
+        # Логировать всё остальное с лимитом
+        limit rate 10/minute log prefix "NFT-DROP-IN: " level warn
+    }
+
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+        ct state established,related accept
+        iifname "eth0" oifname "eth1" ip daddr 192.168.1.100 tcp dport 80 accept
+    }
+
+    chain output {
+        type filter hook output priority filter; policy accept;
+    }
+}
+
+# ===== Таблица NAT =====
+table ip nat {
+    chain prerouting {
+        type nat hook prerouting priority dstnat; policy accept;
+        iifname "eth0" tcp dport 80 dnat to 192.168.1.100
+    }
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        oifname "eth0" ip saddr 192.168.1.0/24 masquerade
+    }
+}
+
+# ===== Таблица mangle (маркировка) =====
+table inet mangle {
+    chain prerouting {
+        type filter hook prerouting priority mangle; policy accept;
+        tcp dport 22 meta mark set 0x2
+    }
+}
+
+================================================================================
+14. ПОЛЕЗНЫЕ КОМАНДЫ
+================================================================================
+
+--- Применение и проверка ---
+  nft -c -f /etc/nftables.conf          # проверить синтаксис (dry-run)
+  nft -f /etc/nftables.conf             # применить
+
+--- Сервис ---
+  systemctl enable --now nftables      # автозапуск + старт
+  systemctl status nftables
+
+--- Мониторинг в реальном времени ---
+  nft monitor                          # все события
+  nft monitor rules                    # изменения правил
+  nft monitor trace                    # трассировка пакетов
+
+--- Трассировка конкретного пакета (отладка) ---
+  nft add rule inet filter input tcp dport 80 meta nftrace set 1
+  nft monitor trace
+
+--- Сохранение/восстановление ---
+  nft list ruleset > /etc/nftables.conf # сохранить текущие правила
+  nft -f backup.nft                     # восстановить из файла
+
+--- Управление sets из CLI ---
+  nft add element inet filter blacklist { 1.2.3.4 }
+  nft delete element inet filter blacklist { 1.2.3.4 }
+  nft list set inet filter blacklist
+
+--- Сброс счётчиков ---
+  nft reset counters                    # все счётчики
+  nft list counters                     # показать все счётчики
+
+================================================================================
+15. МИГРАЦИЯ С IPTABLES
+================================================================================
+
+  # автоматический перевод правил iptables -> nftables:
+  iptables-translate -A INPUT -p tcp --dport 22 -j ACCEPT
+  # -> nft add rule inet filter input tcp dport 22 counter accept
+
+  ip6tables-translate -A INPUT -p tcp --dport 22 -j ACCEPT
+  # -> nft add rule inet filter input tcp dport 22 counter accept
+
+  # перевод всего файла:
+  iptables-restore-translate -f iptables.rules
+
+================================================================================
+16. ТИПИЧНЫЕ СЦЕНАРИИ
+================================================================================
+
+--- Быстрая защита от bruteforce (SSH) ---
+
+  table inet filter {
+      set ssh_blocklist { type ipv4_addr; flags timeout; timeout 1h; }
+      chain input {
+          type filter hook input priority 0; policy drop;
+          ct state established,related accept
+          ip saddr @ssh_blocklist drop
+          tcp dport 22 ct state new limit rate 3/minute burst 5 packets \
+              add @ssh_blocklist { ip saddr } drop
+          tcp dport 22 accept
+      }
+  }
+
+--- Проброс порта (port forwarding) ---
+
+  table ip nat {
+      chain prerouting {
+          type nat hook prerouting priority -100; policy accept;
+          iifname "eth0" tcp dport 2222 dnat to 192.168.1.50:22
+      }
+      chain postrouting {
+          type nat hook postrouting priority 100; policy accept;
+          oifname "eth1" ip daddr 192.168.1.50 masquerade
+      }
+  }
+  table inet filter {
+      chain forward {
+          type filter hook forward priority 0; policy drop;
+          ct state established,related accept
+          iifname "eth0" oifname "eth1" ip daddr 192.168.1.50 tcp dport 22 accept
+      }
+  }
+
+--- Прозрачный прокси (redirect) ---
+
+  table inet filter {
+      chain prerouting {
+          type nat hook prerouting priority -100; policy accept;
+          tcp dport 80 redirect to 3128        # весь HTTP -> Squid
+      }
+  }
+
+--- Защита от SYN flood ---
+
+  chain input {
+      type filter hook input priority 0; policy drop;
+      tcp dport 80 ct state new tcp option maxseg size set 1460 synproxy
+      ct state established,related accept
+  }
+
+--- QoS / маркировка для traffic shaping ---
+
+  table inet mangle {
+      chain postrouting {
+          type filter hook postrouting priority mangle; policy accept;
+          tcp dport 22 meta mark set 0x1          # приоритет SSH
+          tcp dport { 80, 443 } meta mark set 0x2  # bulk traffic
+      }
+  }
+
+================================================================================
+17. ОТЛИЧИЯ ОТ IPTABLES (КРАТКО)
+================================================================================
+
+Аспект       | iptables                        | nftables
+------------|----------------------------------|---------------------------------
+Семейства   | Отдельные утилиты                | Единая nft, семейства в одной таблице
+Таблицы     | Жёстко заданы (filter,nat,mangle)| Произвольные имена, configurable hooks
+Sets        | ipset (отдельный инструмент)     | Встроенные sets/maps с типами, timeout
+Правила     | Только append (-A) / insert (-I) | Полный CRUD: add/insert/replace/delete
+Конфиг      | Скрипты с вызовами iptables      | Декларативный конфиг-файл, один проход
+Производит. | Линейный перебор                 | Хэши, sets, maps — быстрее
+IPv6        | ip6tables (отдельная утилита)    | inet-таблица — единые правила v4+v6
+Логирование | LOG target                       | log выражение (flags, prefix, level, rate)
+Проверка    | Нет                              | nft -c (dry-run перед применением)
+
+================================================================================
+                              КОНЕЦ ШПАРГАЛКИ
+================================================================================

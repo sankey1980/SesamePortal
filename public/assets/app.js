@@ -1508,6 +1508,7 @@ function initCallbackLogin() {
   var pane = form.closest('[data-login-pane]');
   var status = pane.querySelector('[data-callback-status]');
   var notice = pane.querySelector('[data-callback-call-notice]');
+  var dialBtn = pane.querySelector('[data-callback-dial]');
   var timerEl = pane.querySelector('[data-callback-timer]');
   var errorEl = pane.querySelector('[data-callback-error]');
   var phoneInput = pane.querySelector('[data-callback-phone]');
@@ -1607,6 +1608,7 @@ function initCallbackLogin() {
     status.hidden = false;
     notice.textContent = pane.getAttribute('data-msg-waiting') || '';
     timerEl.textContent = '';
+    if (dialBtn) dialBtn.hidden = true;
     submit.disabled = true;
     fetch('/api/portal/v1/auth/callback/start', {
       method: 'POST',
@@ -1624,6 +1626,17 @@ function initCallbackLogin() {
           stopped = false;
           var callMsg = pane.getAttribute('data-msg-call') || '';
           notice.textContent = callMsg.indexOf('%s') !== -1 ? callMsg.replace('%s', data.callback_phone || '') : callMsg;
+          if (dialBtn && data.callback_phone) {
+            var digits = String(data.callback_phone).replace(/[^\d]/g, '');
+            if (digits) {
+              dialBtn.href = 'tel:+' + digits;
+              var dialMsg = pane.getAttribute('data-msg-dial') || '';
+              dialBtn.textContent = dialMsg.indexOf('%s') !== -1 ? dialMsg.replace('%s', data.callback_phone) : dialMsg;
+              dialBtn.hidden = false;
+            } else {
+              dialBtn.hidden = true;
+            }
+          }
           timerEl.textContent = String(data.lifetime_seconds || lifetime);
           startCountdown(data.pending_id);
           pollPending(data.pending_id);

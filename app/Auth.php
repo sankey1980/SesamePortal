@@ -11,16 +11,29 @@ final class Auth
 
     public static function start(): void
     {
+        self::configureSessionCookie();
         if (session_status() !== PHP_SESSION_ACTIVE) {
             session_name('sesame_portal');
             session_start();
         }
 
         if (empty($_SESSION['user_id']) && isset($_COOKIE[self::REMEMBER_COOKIE])) {
-            $userId = self::validateRememberToken((string)$_COOKIE[self::REMEMBER_COOKIE]);
-            if ($userId !== null) {
+            $token = (string)$_COOKIE[self::REMEMBER_COOKIE];
+            if ($token === '') {
+                self::expireRememberCookie();
+                return;
+            }
+            $match = self::findRememberToken($token);
+            if ($match !== null) {
                 session_regenerate_id(true);
-                $_SESSION['user_id'] = $userId;
+                $_SESSION['user_id'] = (int)$match['user_id'];
+                $_SESSION['remember_token_id'] = (int)$match['id'];
+                self::touchRememberToken((int)$match['id']);
+                self::refreshRememberCookie($token);
+                Audit::logForUser((int)$match['user_id'], 'auth.remember_restore', 'ip=' . Audit::clientIp() . ' device=' . Audit::cleanValue((string)$match['label']));
+            } else {
+                self::expireRememberCookie();
+                Audit::logForUser(null, 'auth.remember_failed', 'ip=' . Audit::clientIp());
             }
         }
     }
@@ -98,67 +111,162 @@ final class Auth
     {
         self::start();
         if (!empty($_SESSION['user_id'])) {
-            self::clearRememberMeCookie((int)$_SESSION['user_id']);
+            Audit::logForUser((int)$_SESSION['user_id'], 'auth.logout', 'ip=' . Audit::clientIp());
+            self::clearCurrentRememberToken();
         }
+        $params = session_get_cookie_params();
         $_SESSION = [];
-        session_destroy();
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_destroy();
+        }
+        if (headers_sent() === false && isset($_COOKIE[session_name()])) {
+            setcookie(session_name(), '', [
+                'expires' => 1,
+                'path' => $params['path'] ?? '/',
+                'domain' => $params['domain'] ?? '',
+                'secure' => self::isHttps(),
+                'httponly' => (bool)($params['httponly'] ?? true),
+                'samesite' => 'Lax',
+            ]);
+        }
     }
 
     public static function setRememberMeCookie(int $userId): void
     {
         $token = Util::randomToken(32);
         $hash = password_hash($token, PASSWORD_DEFAULT);
+        $label = self::rememberDeviceLabel();
         $expires = gmdate('c', time() + self::REMEMBER_LIFETIME);
 
-        DB::pdo()->prepare('UPDATE users SET remember_me_token_hash = ?, remember_me_expires = ? WHERE id = ?')
-            ->execute([$hash, $expires, $userId]);
+        DB::pdo()->prepare('INSERT INTO remember_me_tokens(user_id, token_hash, label, expires, last_seen_at, created_at) VALUES(?, ?, ?, ?, NULL, ?)')
+            ->execute([$userId, $hash, $label, $expires, Util::now()]);
+        $tokenId = (int)DB::lastInsertId('remember_me_tokens');
 
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            $_SESSION['remember_token_id'] = $tokenId;
+        }
+
+        self::sendRememberCookie($token);
+    }
+
+    public static function clearAllRememberMeTokens(int $userId): void
+    {
+        DB::pdo()->prepare('DELETE FROM remember_me_tokens WHERE user_id = ?')->execute([$userId]);
+        self::expireRememberCookie();
+    }
+
+    private static function configureSessionCookie(): void
+    {
+        session_set_cookie_params([
+            'lifetime' => self::REMEMBER_LIFETIME,
+            'path' => '/',
+            'domain' => '',
+            'secure' => self::isHttps(),
+            'httponly' => true,
+            'samesite' => 'Lax',
+        ]);
+        ini_set('session.gc_maxlifetime', (string)self::REMEMBER_LIFETIME);
+    }
+
+    private static function isHttps(): bool
+    {
+        $https = (string)($_SERVER['HTTPS'] ?? '');
+        if ($https !== '' && strtolower($https) !== 'off') {
+            return true;
+        }
+        if (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https' || strtolower((string)($_SERVER['HTTP_X_FORWARDED_SSL'] ?? '')) === 'on') {
+            return true;
+        }
+        return false;
+    }
+
+    private static function rememberDeviceLabel(): string
+    {
+        $ua = preg_replace('/\s+/', ' ', trim((string)($_SERVER['HTTP_USER_AGENT'] ?? ''))) ?: '';
+        return substr($ua, 0, 160);
+    }
+
+    private static function sendRememberCookie(string $token): void
+    {
         setcookie(self::REMEMBER_COOKIE, $token, [
             'expires' => time() + self::REMEMBER_LIFETIME,
             'path' => '/',
+            'secure' => self::isHttps(),
             'httponly' => true,
             'samesite' => 'Lax',
         ]);
     }
 
-    public static function clearRememberMeCookie(int $userId): void
+    private static function refreshRememberCookie(string $token): void
     {
-        DB::pdo()->prepare('UPDATE users SET remember_me_token_hash = NULL, remember_me_expires = NULL WHERE id = ?')
-            ->execute([$userId]);
+        setcookie(self::REMEMBER_COOKIE, $token, [
+            'expires' => time() + self::REMEMBER_LIFETIME,
+            'path' => '/',
+            'secure' => self::isHttps(),
+            'httponly' => true,
+            'samesite' => 'Lax',
+        ]);
+    }
 
+    private static function expireRememberCookie(): void
+    {
         if (isset($_COOKIE[self::REMEMBER_COOKIE])) {
             setcookie(self::REMEMBER_COOKIE, '', [
                 'expires' => 1,
                 'path' => '/',
+                'secure' => self::isHttps(),
                 'httponly' => true,
                 'samesite' => 'Lax',
             ]);
         }
     }
 
-    private static function validateRememberToken(string $token): ?int
+    private static function findRememberToken(string $token): ?array
     {
-        if ($token === '') {
-            return null;
-        }
+        $nowTs = time();
+        $rows = DB::pdo()->query('SELECT id, user_id, token_hash, label, expires FROM remember_me_tokens')->fetchAll();
 
-        $now = Util::now();
-        $stmt = DB::pdo()->prepare('SELECT id, remember_me_token_hash, remember_me_expires FROM users WHERE remember_me_token_hash IS NOT NULL AND blocked = 0');
-        $stmt->execute();
-        $users = $stmt->fetchAll();
-
-        foreach ($users as $user) {
-            if ($user['remember_me_token_hash'] === null) {
+        $match = null;
+        foreach ($rows as $row) {
+            if ((int)strtotime((string)$row['expires']) < $nowTs) {
                 continue;
             }
-            if (strtotime((string)$user['remember_me_expires']) < strtotime($now)) {
-                continue;
-            }
-            if (password_verify($token, $user['remember_me_token_hash'])) {
-                return (int)$user['id'];
+            if (password_verify($token, (string)$row['token_hash'])) {
+                $match = $row;
+                break;
             }
         }
 
-        return null;
+        $cutoff = gmdate('c', $nowTs);
+        DB::pdo()->prepare('DELETE FROM remember_me_tokens WHERE expires < ?')->execute([$cutoff]);
+
+        return $match;
+    }
+
+    private static function touchRememberToken(int $tokenId): void
+    {
+        DB::pdo()->prepare('UPDATE remember_me_tokens SET last_seen_at = ?, expires = ? WHERE id = ?')
+            ->execute([Util::now(), gmdate('c', time() + self::REMEMBER_LIFETIME), $tokenId]);
+    }
+
+    private static function clearCurrentRememberToken(): void
+    {
+        $tokenId = (int)($_SESSION['remember_token_id'] ?? 0);
+        if ($tokenId > 0) {
+            DB::pdo()->prepare('DELETE FROM remember_me_tokens WHERE id = ?')->execute([$tokenId]);
+        } else {
+            $userId = (int)($_SESSION['user_id'] ?? 0);
+            $token = (string)($_COOKIE[self::REMEMBER_COOKIE] ?? '');
+            if ($userId > 0 && $token !== '') {
+                $stmt = DB::pdo()->prepare('SELECT id, token_hash FROM remember_me_tokens WHERE user_id = ?');
+                $stmt->execute([$userId]);
+                foreach ($stmt->fetchAll() as $row) {
+                    if (password_verify($token, (string)$row['token_hash'])) {
+                        DB::pdo()->prepare('DELETE FROM remember_me_tokens WHERE id = ?')->execute([(int)$row['id']]);
+                    }
+                }
+            }
+        }
+        self::expireRememberCookie();
     }
 }

@@ -32,5 +32,5 @@ return [
     'smtp_password' => '',
     'smtp_security' => 'ssl',
     'smtp_from_email' => '',
-    'smtp_from_name' => 'SesamePortal',
+    'smtp_from_name' => 'Портал Артел МиК',
 ];

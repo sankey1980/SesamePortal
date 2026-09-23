@@ -846,9 +846,15 @@ Device body:
   "enabled": true,
   "eventsEnabled": false,
   "eventsPullIntervalMs": 5000,
+  "eventsRetentionDays": 7,
   "sourceStreams": ["cam1"]
 }
 ```
+
+`eventsRetentionDays` - срок хранения ONVIF events в целых днях. Если поле
+не передано, используется дефолт DVR (7 дней). Портал SesamePortal передаёт
+это поле равным глубине архива камеры (`retentionDays`, округление вверх
+до целых дней).
 
 Events query:
 

@@ -20,7 +20,7 @@ final class Mail
             : (string)Config::get('smtp_password', '');
         $security = (string)DB::setting('smtp_security', (string)Config::get('smtp_security', 'ssl'));
         $fromEmail = (string)DB::setting('smtp_from_email', (string)Config::get('smtp_from_email', $user));
-        $fromName = (string)DB::setting('smtp_from_name', (string)Config::get('smtp_from_name', 'SesamePortal'));
+        $fromName = (string)DB::setting('smtp_from_name', (string)Config::get('smtp_from_name', 'Портал Артел МиК'));
 
         $remote = ($security === 'ssl' ? 'ssl://' : '') . $host . ':' . $port;
         $errno = 0;

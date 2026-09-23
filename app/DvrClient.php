@@ -104,13 +104,23 @@ final class DvrClient
                 'eventsEnabled' => true,
                 'sourceStreams' => [$name],
             ];
+            $eventsRetentionDays = self::retentionDaysToDays($camera['retention_days'] ?? null);
+            if ($eventsRetentionDays !== null) {
+                $onvifPayload['eventsRetentionDays'] = $eventsRetentionDays;
+            }
             $onvifResult = self::upsertOnvifDevice((int)$camera['server_id'], $onvifPayload);
             $onvifPath = $onvifResult['deviceId'] ?? $name;
             $onvifMsg = self::responseSummary(['status' => $onvifResult['status'] ?? 0, 'body' => json_encode($onvifResult['data'] ?? null)], '/api/onvif/devices/' . rawurlencode((string)$onvifPath));
             $message .= ' | ONVIF: ' . $onvifMsg;
             if (($onvifResult['status'] ?? 0) >= 200 && ($onvifResult['status'] ?? 0) < 300 && $onvifPath !== null && $onvifPath !== '') {
-                $subscribe = self::apiRequest((int)$camera['server_id'], 'POST', '/api/onvif/devices/' . rawurlencode((string)$onvifPath) . '/events/subscribe');
-                $message .= ' | ONVIF subscribe: ' . self::responseSummary($subscribe, '/api/onvif/devices/' . rawurlencode((string)$onvifPath) . '/events/subscribe');
+                $caps = self::checkOnvifCapabilities((int)$camera['server_id'], [(string)$onvifPath]);
+                $message .= ' | ONVIF caps: ' . self::responseSummary($caps, '/api/onvif/devices/capabilities/check');
+                if ($caps['ok']) {
+                    $subscribe = self::apiRequest((int)$camera['server_id'], 'POST', '/api/onvif/devices/' . rawurlencode((string)$onvifPath) . '/events/subscribe');
+                    $message .= ' | ONVIF subscribe: ' . self::responseSummary($subscribe, '/api/onvif/devices/' . rawurlencode((string)$onvifPath) . '/events/subscribe');
+                } else {
+                    $message .= ' | ONVIF subscribe: skipped (capabilities check failed)';
+                }
             }
         }
 
@@ -158,6 +168,31 @@ final class DvrClient
     {
         $value = strtolower(trim((string)$value));
         return in_array($value, ['auto', 'always', 'off'], true) ? $value : null;
+    }
+
+    private static function retentionDaysToDays(mixed $value): ?int
+    {
+        $value = strtolower(trim((string)$value));
+        if ($value === '') {
+            return null;
+        }
+        if (preg_match('/^(\d+(?:\.\d+)?)\s*(d|day|days|h|hour|hours|m|min|mins|minutes)?$/', $value, $matches) !== 1) {
+            return null;
+        }
+        $amount = (float)$matches[1];
+        $unit = $matches[2] ?? 'd';
+        if ($unit === '') {
+            $unit = 'd';
+        }
+        $days = match ($unit) {
+            'h', 'hour', 'hours' => $amount / 24,
+            'm', 'min', 'mins', 'minutes' => $amount / 1440,
+            default => $amount,
+        };
+        if ($days <= 0) {
+            return null;
+        }
+        return max(1, (int)ceil($days));
     }
 
     private static function audioCodec(mixed $value): string
@@ -537,6 +572,116 @@ final class DvrClient
     public static function checkOnvifDevice(int $serverId, string $id): array
     {
         return self::apiRequest($serverId, 'POST', '/api/onvif/devices/' . rawurlencode($id) . '/check');
+    }
+
+    public static function checkOnvifCapabilities(int $serverId, array $ids): array
+    {
+        $ids = array_slice(array_unique(array_map('strval', $ids)), 0, 200);
+        $ids = array_values(array_filter($ids, 'strlen'));
+        if ($ids === []) {
+            return ['ok' => false, 'status' => 0, 'message' => 'ONVIF device id list is empty', 'data' => null];
+        }
+        return self::apiRequest($serverId, 'POST', '/api/onvif/devices/capabilities/check', ['ids' => $ids], 30);
+    }
+
+    public static function verifyCameraOnvif(int $cameraId): array
+    {
+        $camera = Repo::camera($cameraId);
+        if (!$camera || !$camera['server_id']) {
+            return ['ok' => false, 'message' => 'Camera has no DVR server', 'capabilities' => 'error', 'events' => 'error'];
+        }
+
+        $server = Repo::server((int)$camera['server_id']);
+        if (!$server || (int)$server['blocked'] === 1) {
+            return ['ok' => false, 'message' => 'SesameDVR server is unavailable or blocked', 'capabilities' => 'error', 'events' => 'error'];
+        }
+
+        $controlMode = (string)($camera['dvr_control_mode'] ?? 'managed');
+        $onvifHost = trim((string)($camera['onvif_host'] ?? ''));
+        if ($controlMode === 'read_only') {
+            return ['ok' => false, 'message' => I18n::t('cameras.readOnlySyncSkipped', 'Read-only mode: DVR management skipped'), 'capabilities' => 'skipped', 'events' => 'skipped'];
+        }
+        if ($controlMode === 'edge_agent') {
+            return ['ok' => false, 'message' => I18n::t('cameras.onvifEdgeAgentUnavailable', 'Edge-agent mode: ONVIF is managed by the agent'), 'capabilities' => 'skipped', 'events' => 'skipped'];
+        }
+        if ($onvifHost === '') {
+            return ['ok' => false, 'message' => 'ONVIF host is not configured for this camera', 'capabilities' => 'skipped', 'events' => 'skipped'];
+        }
+
+        $streamName = trim((string)($camera['dvr_stream_name'] ?: $camera['name']));
+        if (!Util::isDvrStreamName($streamName)) {
+            return ['ok' => false, 'message' => I18n::t('cameras.invalidStreamName', 'Technical stream name must start with a Latin letter or digit and can contain only Latin letters, digits, dot, hyphen, and underscore, up to 128 characters.'), 'capabilities' => 'error', 'events' => 'error'];
+        }
+
+        $deviceId = self::resolveOnvifDeviceId((int)$camera['server_id'], $streamName);
+        if ($deviceId === null) {
+            return ['ok' => false, 'message' => 'ONVIF device is not synced yet for stream ' . $streamName . '. Run camera sync first.', 'capabilities' => 'error', 'events' => 'error'];
+        }
+
+        $capsResult = self::checkOnvifCapabilities((int)$camera['server_id'], [$deviceId]);
+        if (!$capsResult['ok']) {
+            return ['ok' => false, 'message' => $capsResult['message'], 'capabilities' => 'error', 'events' => 'error'];
+        }
+
+        $caps = self::extractCapabilitiesStatus($capsResult['data']);
+        $events = self::describeOnvifEventsStatus(self::apiRequest((int)$camera['server_id'], 'GET', '/api/onvif/devices/' . rawurlencode($deviceId) . '/events/status'));
+
+        if (str_starts_with($events, 'error') && $caps['ok']) {
+            $subscribe = self::subscribeOnvifEvents((int)$camera['server_id'], $streamName);
+            if ($subscribe['ok']) {
+                $events = self::describeOnvifEventsStatus(self::apiRequest((int)$camera['server_id'], 'GET', '/api/onvif/devices/' . rawurlencode($deviceId) . '/events/status'));
+            } else {
+                $events = 'error (' . $subscribe['message'] . ')';
+            }
+        }
+
+        $message = 'ONVIF caps: ' . ($caps['label'] ?? 'unknown') . ' | events: ' . $events;
+        return ['ok' => $caps['ok'] ?? false, 'message' => $message, 'capabilities' => $caps['label'] ?? 'unknown', 'events' => $events];
+    }
+
+    private static function extractCapabilitiesStatus(mixed $data): array
+    {
+        $devices = null;
+        if (is_array($data)) {
+            if (isset($data['devices']) && is_array($data['devices'])) {
+                $devices = $data['devices'];
+            } elseif (isset($data[0]) && is_array($data[0])) {
+                $devices = $data;
+            } elseif (is_array($data) && array_key_exists('capabilitiesStatus', $data)) {
+                $devices = [$data];
+            }
+        }
+        $first = is_array($devices) ? ($devices[0] ?? null) : null;
+        if (!is_array($first)) {
+            return ['ok' => false, 'label' => 'unknown'];
+        }
+        $status = trim((string)($first['capabilitiesStatus'] ?? ''));
+        if ($status !== '') {
+            return ['ok' => strtolower($status) === 'ok', 'label' => $status];
+        }
+        $caps = $first['capabilities'] ?? null;
+        $onvif = is_array($caps) ? ($caps['onvif'] ?? null) : null;
+        $ready = is_array($onvif) ? ((int)($onvif['ready'] ?? 0) === 1) : false;
+        return ['ok' => $ready, 'label' => $ready ? 'ok' : 'N/A'];
+    }
+
+    private static function describeOnvifEventsStatus(array $result): string
+    {
+        if (!$result['ok']) {
+            return 'error';
+        }
+        $data = is_array($result['data']) ? $result['data'] : [];
+        $sub = is_array($data['subscription'] ?? null) ? $data['subscription'] : $data;
+        $state = trim((string)($sub['state'] ?? ''));
+        $connection = trim((string)($sub['connectionState'] ?? ''));
+        $received = (int)($sub['received'] ?? 0);
+        if ($state === '') {
+            $state = 'error';
+        }
+        if ($connection === '') {
+            $connection = 'unknown';
+        }
+        return $state . '/' . $connection . ', received=' . $received;
     }
 
     private static function managementTokenIssue(array $server, string $token): ?string

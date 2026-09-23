@@ -152,8 +152,8 @@ trait AppPagesTrait
                     $message = self::t('settings.smtpNotConfigured', 'SMTP не настроен');
                     $messageClass = 'danger';
                 } else {
-                    $subject = self::t('settings.smtpTestSubject', 'Тестовое письмо SesamePortal');
-                    $body = '<p>' . self::t('settings.smtpTestBody', 'Это тестовое письмо из SesamePortal. Если вы его получили, SMTP работает.') . '</p>';
+                    $subject = self::t('settings.smtpTestSubject', 'Тестовое письмо Артел МиК');
+                    $body = '<p>' . self::t('settings.smtpTestBody', 'Это тестовое письмо из портала Артел МиК. Если вы его получили, SMTP работает.') . '</p>';
                     $ok = Mail::send($testEmail, $subject, $body);
                     $message = $ok
                         ? self::t('settings.smtpTestOk', 'Тестовое письмо отправлено')
@@ -258,9 +258,9 @@ trait AppPagesTrait
         $user = (string)DB::setting('smtp_user', (string)Config::get('smtp_user', ''));
         $security = (string)DB::setting('smtp_security', (string)Config::get('smtp_security', 'ssl'));
         $fromEmail = (string)DB::setting('smtp_from_email', (string)Config::get('smtp_from_email', ''));
-        $fromName = (string)DB::setting('smtp_from_name', (string)Config::get('smtp_from_name', 'SesamePortal'));
+        $fromName = (string)DB::setting('smtp_from_name', (string)Config::get('smtp_from_name', 'Портал Артел МиК'));
         if ($fromName === '') {
-            $fromName = 'SesamePortal';
+            $fromName = 'Портал Артел МиК';
         }
         $hasPassword = (string)DB::setting('smtp_password', '') !== '';
 
@@ -512,7 +512,7 @@ trait AppPagesTrait
         }
 
         self::layout(self::t('login.title', 'Вход'), function () use ($error) {
-            echo '<section class="login-visual"><div><img src="/assets/logo-sesameportal-inverse.svg" alt="SesamePortal"><p>' . self::t('login.subtitle', 'Портал видеонаблюдения SesameWare') . '</p></div>';
+            echo '<section class="login-visual"><div><img src="/assets/logo-sesameportal-inverse.svg" alt="Портал Артел МиК"><p>' . self::t('login.subtitle', 'Портал видеонаблюдения SesameWare') . '</p></div>';
             echo '<div class="login-features"><span>' . Util::h(self::t('login.feature.secure', 'Безопасно')) . '</span><span>' . Util::h(self::t('login.feature.reliable', 'Надежно')) . '</span><span>' . Util::h(self::t('login.feature.efficient', 'Производительно')) . '</span></div></section>';
             echo '<section class="login-panel login-card">';
             if ($error) {
@@ -539,6 +539,7 @@ trait AppPagesTrait
                 echo ' data-callback-lifetime="120"';
                 echo ' data-msg-waiting="' . Util::h(self::t('login.callWaiting', 'Ожидаем звонок…')) . '"';
                 echo ' data-msg-call="' . Util::h(self::t('login.callInstruction', 'Позвоните на номер %s с телефона, указанного при входе')) . '"';
+                echo ' data-msg-dial="' . Util::h(self::t('login.callDial', 'Позвонить на %s')) . '"';
                 echo ' data-msg-expired="' . Util::h(self::t('login.callExpired', 'Время ожидания истекло. Попробуйте ещё раз.')) . '"';
                 echo ' data-msg-rejected="' . Util::h(self::t('login.callRejected', 'Номер не найден или вход по звонку недоступен')) . '"';
                 echo ' data-msg-rate="' . Util::h(self::t('login.callRate', 'Слишком много попыток. Подождите минуту.')) . '"';
@@ -549,6 +550,7 @@ trait AppPagesTrait
                 echo '</form>';
                 echo '<div class="callback-status" data-callback-status hidden>';
                 echo '<p data-callback-call-notice class="callback-call-notice"></p>';
+                echo '<a href="#" data-callback-dial class="callback-dial" role="button" hidden></a>';
                 echo '<div class="callback-timer" data-callback-timer></div>';
                 echo '</div>';
                 echo '<div class="alert danger" data-callback-error hidden></div>';
@@ -642,7 +644,7 @@ trait AppPagesTrait
                 if ($newPassword !== '') {
                     DB::pdo()->prepare('UPDATE users SET name=?, email=?, phone=?, password_hash=? WHERE id=?')
                         ->execute([$name, $email, $phone, password_hash($newPassword, PASSWORD_DEFAULT), $userId]);
-                    Auth::clearRememberMeCookie($userId);
+                    Auth::clearAllRememberMeTokens($userId);
                     Audit::logForUser($userId, 'user.profile.update', 'password changed, name=' . Audit::cleanValue($name));
                 } else {
                     DB::pdo()->prepare('UPDATE users SET name=?, email=?, phone=? WHERE id=?')
@@ -695,7 +697,7 @@ trait AppPagesTrait
                         ->execute([$token, $expires, (int)$u['id']]);
                     $baseUrl = rtrim((string)Config::get('base_url', ''), '/');
                     $resetLink = $baseUrl . '/reset?token=' . $token;
-                    $subject = self::t('auth.resetEmailSubject', 'Восстановление пароля SesamePortal');
+                    $subject = self::t('auth.resetEmailSubject', 'Восстановление пароля Артел МиК');
                     $body = '<p>' . Util::h(self::t('auth.resetEmailBody', 'Для сброса пароля перейдите по ссылке:')) . '</p>';
                     $body .= '<p><a href="' . $resetLink . '">' . $resetLink . '</a></p>';
                     $body .= '<p>' . Util::h(self::t('auth.resetEmailExpire', 'Ссылка действительна 1 час.')) . '</p>';
@@ -958,16 +960,28 @@ trait AppPagesTrait
                 $current = $id > 0 ? self::rowById('portal_groups', $id) : null;
                 $parentId = self::groupParentIdFromInput(['parent_group_id' => Util::post('parent_group_id')], $current);
                 $parentError = self::groupParentValidationError($id, $parentId);
+                $billingId = trim((string)Util::post('billing_id'));
+                $billingDuplicate = '';
+                if ($billingId !== '') {
+                    $billingStmt = $pdo->prepare('SELECT id FROM portal_groups WHERE billing_id = ?');
+                    $billingStmt->execute([$billingId]);
+                    $billingOwner = $billingStmt->fetchColumn();
+                    if ($billingOwner !== false && $billingOwner !== null && (int)$billingOwner !== $id && (int)$billingOwner !== 0) {
+                        $billingDuplicate = self::t('groups.billingIdDuplicate', 'Группа с таким ID в биллинге уже существует');
+                    }
+                }
                 if ($name === '') {
                     $message = self::t('groups.nameRequired', 'Название группы обязательно');
                 } elseif ($parentError !== '') {
                     $message = $parentError;
+                } elseif ($billingDuplicate !== '') {
+                    $message = $billingDuplicate;
                 } elseif ($id > 0) {
-                    $pdo->prepare('UPDATE portal_groups SET parent_group_id=?, name=?, description=?, blocked=? WHERE id=?')
-                        ->execute([$parentId, $name, Util::post('description'), Util::checkbox('blocked'), $id]);
+                    $pdo->prepare('UPDATE portal_groups SET parent_group_id=?, name=?, description=?, billing_id=?, blocked=? WHERE id=?')
+                        ->execute([$parentId, $name, Util::post('description'), $billingId !== '' ? $billingId : null, Util::checkbox('blocked'), $id]);
                 } else {
-                    $pdo->prepare('INSERT INTO portal_groups(parent_group_id, name, description, blocked, created_at) VALUES(?, ?, ?, ?, ?)')
-                        ->execute([$parentId, $name, Util::post('description'), Util::checkbox('blocked'), Util::now()]);
+                    $pdo->prepare('INSERT INTO portal_groups(parent_group_id, name, description, billing_id, blocked, created_at) VALUES(?, ?, ?, ?, ?, ?)')
+                        ->execute([$parentId, $name, Util::post('description'), $billingId !== '' ? $billingId : null, Util::checkbox('blocked'), Util::now()]);
                     $id = DB::lastInsertId('portal_groups');
                 }
                 if ($message === '') {
@@ -1064,6 +1078,7 @@ trait AppPagesTrait
                 echo '<input type="hidden" name="action" value="save"><input type="hidden" name="id" value="' . Util::h($edit['id'] ?? 0) . '">';
                 echo '<label>' . self::t('column.name', 'Название') . '<input name="name" value="' . Util::h($edit['name'] ?? '') . '" required></label>';
                 echo '<label>' . self::t('column.description', 'Описание') . '<textarea name="description">' . Util::h($edit['description'] ?? '') . '</textarea></label>';
+                echo '<label>' . self::t('groups.billingId', 'ID в биллинге') . '<input name="billing_id" value="' . Util::h($edit['billing_id'] ?? '') . '" placeholder="' . Util::h(self::t('groups.billingIdHint', 'Уникальный ID группы в биллинговой системе (необязательно)')) . '"></label>';
                 echo '<label class="check"><input type="checkbox" name="blocked" ' . (!empty($edit['blocked']) ? 'checked' : '') . '> ' . self::t('column.blocked', 'Заблокирована') . '</label>';
                 echo '<button class="primary">' . self::t('action.save', 'Сохранить') . '</button></form>';
                 echo '</div>';
@@ -1087,6 +1102,7 @@ trait AppPagesTrait
                 echo '<input type="hidden" name="action" value="save"><input type="hidden" name="id" value="0">';
                 echo '<label>' . self::t('column.name', 'Название') . '<input name="name" value="" required></label>';
                 echo '<label>' . self::t('column.description', 'Описание') . '<textarea name="description"></textarea></label>';
+                echo '<label>' . self::t('groups.billingId', 'ID в биллинге') . '<input name="billing_id" value="" placeholder="' . Util::h(self::t('groups.billingIdHint', 'Уникальный ID группы в биллинговой системе (необязательно)')) . '"></label>';
                 echo '<label class="check"><input type="checkbox" name="blocked"> ' . self::t('column.blocked', 'Заблокирована') . '</label>';
                 echo '<button class="primary">' . self::t('action.save', 'Сохранить') . '</button></form>';
                 echo '</details>';
@@ -1729,6 +1745,10 @@ trait AppPagesTrait
             } elseif ($action === 'sync' && $id > 0) {
                 $result = DvrClient::syncCamera($id);
                 $message = self::cameraSyncNotice($result);
+            } elseif ($action === 'check_onvif' && $id > 0) {
+                $result = DvrClient::verifyCameraOnvif($id);
+                $message = self::cameraOnvifCheckNotice($result);
+                Audit::log('camera.onvif_check', 'camera_id=' . $id . ' result=' . mb_substr((string)($result['message'] ?? ''), 0, 300));
             } elseif ($action === 'issue_camera_token' && $id > 0) {
                 TokenService::issueCameraToken($id);
             } elseif ($action === 'revoke_camera_token' && $id > 0) {
@@ -1762,7 +1782,7 @@ trait AppPagesTrait
             }
             echo '<a class="btn" href="/admin/cameras/import">' . self::t('cameras.importFromDvr', 'Импорт с DVR') . '</a>';
             echo '</span></summary>';
-            echo '<form method="post" class="form">' . Csrf::field();
+            echo '<div class="camera-edit-layout"><div class="camera-edit-form-col"><form method="post" class="form">' . Csrf::field();
             echo '<input type="hidden" name="action" value="save"><input type="hidden" name="id" value="' . Util::h($edit['id'] ?? 0) . '">';
             echo '<label>' . self::t('cameras.displayName', 'Название потока') . '<input name="display_name" value="' . Util::h($form['name'] ?? '') . '"></label>';
             $edgeAgentMode = ($form['dvr_control_mode'] ?? 'managed') === 'edge_agent';
@@ -1779,12 +1799,12 @@ trait AppPagesTrait
             echo '<option value="passthrough" ' . ($audioCodec === 'passthrough' ? 'selected' : '') . '>' . self::t('cameras.audioCodecPassthrough', 'Добавить AAC для HLS и сохранить PCM для WebRTC') . '</option>';
             echo '</select></label>';
             echo '<div data-camera-onvif-field' . ($edgeAgentMode ? ' hidden' : '') . '>';
-            echo '<details class="panel camera-onvif-panel"' . (trim((string)($form['onvif_host'] ?? '')) !== '' ? ' open' : '') . '><summary><h3>ONVIF</h3></summary>';
+            echo '<details class="panel camera-onvif-panel" open><summary><h3>ONVIF</h3></summary>';
             echo '<div class="form-grid cols-2">';
             echo '<label>' . self::t('cameras.onvifHost', 'IP-адрес / Хост') . '<input name="onvif_host" value="' . Util::h($form['onvif_host'] ?? '') . '" placeholder="10.0.0.10"></label>';
             echo '<label>' . self::t('cameras.onvifPort', 'Порт') . '<input name="onvif_port" type="number" min="1" max="65535" value="' . Util::h((string)($form['onvif_port'] ?? 80)) . '"></label>';
             echo '<label>' . self::t('cameras.onvifUsername', 'Логин') . '<input name="onvif_username" value="' . Util::h($form['onvif_username'] ?? '') . '" placeholder="admin"></label>';
-            echo '<label>' . self::t('cameras.onvifPassword', 'Пароль') . '<input name="onvif_password" type="password" value="' . Util::h($form['onvif_password'] ?? '') . '" placeholder="••••••"></label>';
+            echo '<label>' . self::t('cameras.onvifPassword', 'Пароль') . '<input name="onvif_password" type="text" value="' . Util::h($form['onvif_password'] ?? '') . '"></label>';
             echo '</div></details></div>';
             $isAdmin = (Auth::user()['role'] ?? '') === 'admin';
             if ($isAdmin && $edit) {
@@ -1860,8 +1880,35 @@ trait AppPagesTrait
             echo '</select></label></div></details>';
             echo '<label class="check"><input type="checkbox" name="blocked" ' . (!empty($form['blocked']) ? 'checked' : '') . '> ' . self::t('cameras.blocked', 'Заблокирована') . '</label>';
             self::folderCheckboxTree(self::t('cameras.folders', 'Папки'), 'folder_ids[]', $folders, $linkedFolders);
-            echo '<button class="primary">' . self::t('action.saveSync', 'Сохранить и синхронизировать') . '</button></form></details>';
+            echo '<button class="primary">' . self::t('action.saveSync', 'Сохранить и синхронизировать') . '</button></form></div>';
             if ($edit) {
+                $editCameraId = (int)$edit['id'];
+                $hasDvrStream = trim((string)($edit['dvr_stream_name'] ?? '')) !== '' && (int)($edit['server_id'] ?? 0) > 0;
+                $openPlayerLabel = self::t('viewer.openPlayer', 'Открыть плеер');
+                $previewStateText = self::t('js.previewUnavailable', 'Превью недоступно');
+                echo '<aside class="camera-edit-preview-card">';
+                echo '<div class="camera-edit-preview-title">' . self::t('cameras.preview', 'Предпросмотр') . '</div>';
+                if ($hasDvrStream) {
+                    echo '<a class="preview camera-edit-preview is-loading" href="/viewer/player?id=' . $editCameraId . '" aria-label="' . Util::h($openPlayerLabel) . '">';
+                    echo '<img data-preview-src="/viewer/preview?id=' . $editCameraId . '" data-preview-refresh="10" data-preview-refresh-ms="10000" alt="" loading="lazy" decoding="async" hidden>';
+                    echo '<span class="preview-spinner" aria-hidden="true"></span><span class="preview-state">' . Util::h($previewStateText) . '</span><span class="preview-play" aria-hidden="true"></span><span class="sr-only">' . Util::h($openPlayerLabel) . '</span></a>';
+                } else {
+                    echo '<div class="preview camera-edit-preview no-preview"><span class="preview-state">' . Util::h($previewStateText) . '</span></div>';
+                }
+                echo '</aside>';
+            }
+            echo '</div></details>';
+            if ($edit) {
+                if ((string)($edit['dvr_control_mode'] ?? 'managed') === 'managed' && trim((string)($edit['onvif_host'] ?? '')) !== '') {
+                    self::smallPost(
+                        '/admin/cameras',
+                        ['action' => 'check_onvif', 'id' => (int)$edit['id']],
+                        self::t('action.checkOnvif', 'Проверить ONVIF'),
+                        '',
+                        '',
+                        'check'
+                    );
+                }
                 $editHasToken = trim((string)($edit['permanent_token_hash'] ?? '')) !== '';
                 self::smallPostFormOpen(
                     'camera-token-issue-form',
@@ -2301,6 +2348,15 @@ trait AppPagesTrait
         return !empty($sync['ok'])
             ? self::t('cameras.syncDone', 'Синхронизация выполнена')
             : self::t('cameras.syncFailed', 'Синхронизация не выполнена');
+    }
+
+    private static function cameraOnvifCheckNotice(array $result): string
+    {
+        $title = !empty($result['ok'])
+            ? self::t('cameras.onvifCheckDone', 'Проверка ONVIF выполнена')
+            : self::t('cameras.onvifCheckFailed', 'Проверка ONVIF не выполнена');
+        $detail = trim((string)($result['message'] ?? ''));
+        return $detail !== '' ? $title . ': ' . $detail : $title;
     }
 
     private static function cameraFormDefaults(?array $edit): array

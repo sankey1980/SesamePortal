@@ -401,10 +401,23 @@
         } catch (_) { full.blur(); }
       });
     });
+    function toggleTileFullscreen(item) {
+      const exit = document.exitFullscreen || document.webkitExitFullscreen;
+      const enter = item.tile.requestFullscreen || item.tile.webkitRequestFullscreen;
+      try {
+        if ((document.fullscreenElement || document.webkitFullscreenElement) === item.tile) exit.call(document);
+        else if (enter) enter.call(item.tile);
+      } catch (_) {}
+    }
     items.forEach(item => {
       setCameraZoom(item, false);
       item.zoomButton.disabled = false;
       item.zoomButton.addEventListener('click', () => { setCameraZoom(item, !item.zoomEnabled); showControls(); });
+      item.tile.addEventListener('dblclick', event => {
+        event.preventDefault();
+        if (event.target.closest('button, a')) return;
+        toggleTileFullscreen(item);
+      });
     });
     document.addEventListener('fullscreenchange', showControls);
     document.addEventListener('webkitfullscreenchange', showControls);

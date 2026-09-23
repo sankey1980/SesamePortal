@@ -20,14 +20,14 @@ trait AppRenderTrait
         if ($user && $showChrome && $theme === '') {
             echo '<script>if(!document.documentElement.dataset.theme&&window.matchMedia){document.documentElement.dataset.theme=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.themeAuto="1";}</script>';
         }
-        echo '<title>' . Util::h($title) . ' - SesamePortal</title>';
+        echo '<title>' . Util::h($title) . ' - Портал Артел МиК</title>';
         echo '<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">';
         echo '<link rel="manifest" href="/manifest.json">';
         echo '<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">';
         echo '<meta name="theme-color" content="#161616">';
         echo '<meta name="apple-mobile-web-app-capable" content="yes">';
         echo '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">';
-        echo '<meta name="apple-mobile-web-app-title" content="SesamePortal">';
+        echo '<meta name="apple-mobile-web-app-title" content="Портал Артел МиК">';
         echo '<meta name="mobile-web-app-capable" content="yes">';
         echo '<link rel="stylesheet" href="' . Util::h(self::assetUrl('/assets/styles.css')) . '">';
         echo '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">';
@@ -38,7 +38,7 @@ trait AppRenderTrait
         echo '</head><body' . ($bodyClass !== '' ? ' class="' . Util::h($bodyClass) . '"' : '') . '>';
         if ($user && $showChrome) {
             echo '<div class="shell"><aside class="sidebar">';
-            echo '<a class="brand-logo-link" href="/"><img class="brand-logo-full" src="/assets/logo-sesameportal-inverse.svg" alt="SesamePortal"></a>';
+            echo '<a class="brand-logo-link" href="/"><img class="brand-logo-full" src="/assets/logo-sesameportal-inverse.svg" alt="Портал Артел МиК"></a>';
             echo '<div class="nav-section">' . Util::h(self::t('nav.section.view', 'Просмотр')) . '</div><nav class="nav">';
             $viewerFilter = (string)($_GET['filter'] ?? 'all');
             self::navLink('/', self::t('nav.cameras', 'Камеры'), 'grid', Util::path() === '/' && $viewerFilter !== 'favorites');
@@ -1092,6 +1092,9 @@ trait AppRenderTrait
             }
             if ($actions && str_contains($base, 'cameras')) {
                 self::smallPost($actionUrl, ['action' => 'sync', 'id' => $row['id']], self::t('action.sync', 'Синхронизировать'), '', '', 'sync');
+                if ((string)($row['dvr_control_mode'] ?? 'managed') === 'managed' && trim((string)($row['onvif_host'] ?? '')) !== '') {
+                    self::smallPost($actionUrl, ['action' => 'check_onvif', 'id' => $row['id']], self::t('action.checkOnvif', 'Проверить ONVIF'), '', '', 'check');
+                }
             }
             if ($base === '/admin/cameras' || $base === '/admin/groups') {
                 self::iconActionLink(self::tableActionUrl($base, ['delete' => (int)$row['id']], $pager), self::t('action.delete', 'Удалить'), 'trash', 'danger');

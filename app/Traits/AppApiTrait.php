@@ -24,10 +24,11 @@ trait AppApiTrait
                         'servers',
                         'cameras',
                         'favorites',
-                        'agents',
-                        'audit',
-                        'auth',
-                    ],
+'agents',
+                'audit',
+                'auth',
+                'billing',
+            ],
                 ]),
                 'me' => self::apiMe($parts),
                 'dashboard' => self::apiDashboard($parts),
@@ -41,10 +42,11 @@ trait AppApiTrait
                 'agents' => self::apiAgents($parts),
                 'audit' => self::apiAudit($parts),
                 'auth' => self::apiAuthCallback($parts),
+                'billing' => self::apiBilling($parts),
                 default => self::apiError(404, 'not_found', 'Unknown API endpoint'),
             };
         } catch (\Throwable $error) {
-            error_log('SesamePortal API internal_error method=' . self::apiMethod() . ' path=' . Util::path() . ' ip=' . Util::clientIp() . ' message=' . $error->getMessage());
+            error_log('SesamePortal API internal_error method=' . self::apiMethod() . ' path=' . Util::path() . ' ip=' . Audit::clientIp() . ' message=' . $error->getMessage());
             self::apiError(500, 'internal_error', $error->getMessage());
         }
     }
@@ -63,9 +65,19 @@ trait AppApiTrait
         return strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET'));
     }
 
+    private static ?string $apiRawBodyCache = null;
+
+    private static function apiRawBody(): string
+    {
+        if (self::$apiRawBodyCache === null) {
+            self::$apiRawBodyCache = file_get_contents('php://input') ?: '';
+        }
+        return self::$apiRawBodyCache;
+    }
+
     private static function apiInput(): array
     {
-        $raw = file_get_contents('php://input') ?: '';
+        $raw = self::apiRawBody();
         $contentType = strtolower((string)($_SERVER['CONTENT_TYPE'] ?? ''));
         if ($raw !== '' && (str_contains($contentType, 'application/json') || str_starts_with(trim($raw), '{'))) {
             $decoded = json_decode($raw, true);
@@ -308,6 +320,35 @@ trait AppApiTrait
         return self::normalizePhone($value);
     }
 
+    private static function callbackCollectPhones(array $payload): string
+    {
+        $digits = [];
+        $consider = function (string $clean) use (&$digits): void {
+            if (strlen($clean) >= 8 && strlen($clean) <= 15 && !in_array($clean, $digits, true)) {
+                $digits[] = $clean;
+            }
+        };
+        $walk = function (mixed $value) use (&$walk, $consider): void {
+            if (is_array($value)) {
+                foreach ($value as $v) {
+                    $walk($v);
+                }
+                return;
+            }
+            if (!is_string($value)) {
+                return;
+            }
+            $consider(preg_replace('/\D+/', '', $value) ?: '');
+            if (preg_match_all('/\d{8,15}/', $value, $matches)) {
+                foreach ($matches[0] as $run) {
+                    $consider($run);
+                }
+            }
+        };
+        $walk($payload);
+        return implode(',', $digits);
+    }
+
     private static function callbackFormatPhone(string $digits): string
     {
         if (strlen($digits) !== 11) {
@@ -420,8 +461,14 @@ trait AppApiTrait
         }
 
         $input = self::apiInput();
-        $phone = self::callbackNormalizePhone((string)($input['phone'] ?? ''));
+        $rawPhone = (string)($input['phone'] ?? '');
+        $phone = self::callbackNormalizePhone($rawPhone);
+        $allPhones = self::callbackCollectPhones($input);
+        $rawBody = self::apiRawBody();
         if ($phone === '') {
+            $ip = Audit::clientIp();
+            Audit::logForUser(null, 'auth.callback.webhook', 'phone=unparsed ip=' . $ip . ' result=invalid_phone');
+            Audit::fileAppend('callback-webhook', 'phone=unparsed raw=' . Audit::cleanValue($rawPhone, 60) . ' phones=' . $allPhones . ' body=' . Audit::cleanValue($rawBody, 4000) . ' ip=' . $ip . ' result=invalid_phone');
             self::apiError(422, 'invalid_phone', 'Invalid phone number');
             return;
         }
@@ -430,6 +477,9 @@ trait AppApiTrait
         $stmt = DB::pdo()->prepare("UPDATE auth_callback_requests SET status = 'confirmed', confirmed_at = ? WHERE phone = ? AND status = 'pending' AND expires_at > ?");
         $stmt->execute([$now, $phone, $now]);
         if ($stmt->rowCount() <= 0) {
+            $ip = Audit::clientIp();
+            Audit::logForUser(null, 'auth.callback.webhook', 'phone=' . Audit::cleanValue($phone) . ' ip=' . $ip . ' result=no_active_request');
+            Audit::fileAppend('callback-webhook', 'phone=' . Audit::cleanValue($phone) . ' phones=' . $allPhones . ' body=' . Audit::cleanValue($rawBody, 4000) . ' ip=' . $ip . ' result=no_active_request');
             self::apiError(404, 'no_active_request', 'No active callback request for this phone');
             return;
         }
@@ -437,6 +487,7 @@ trait AppApiTrait
         $stmt = DB::pdo()->prepare('SELECT id FROM users WHERE phone = ? AND blocked = 0');
         $stmt->execute([$phone]);
         $userId = $stmt->fetchColumn();
+        Audit::fileAppend('callback-webhook', 'phone=' . Audit::cleanValue($phone) . ' phones=' . $allPhones . ' body=' . Audit::cleanValue($rawBody, 4000) . ' ip=' . Audit::clientIp() . ' result=confirmed');
         if ($userId !== false && $userId !== null) {
             Audit::logForUser((int)$userId, 'auth.callback.confirmed', 'user_id=' . (int)$userId . ' phone=' . Audit::cleanValue($phone) . ' ip=' . Audit::clientIp());
         } else {
@@ -534,6 +585,70 @@ trait AppApiTrait
         Audit::logForUser((int)$user['id'], 'auth.callback.login', 'user_id=' . (int)$user['id'] . ' phone=' . Audit::cleanValue($phone) . ' ip=' . Audit::clientIp());
 
         self::apiJson(['ok' => true, 'redirect' => '/']);
+    }
+
+    private static function apiExternalAppKeyAuthentication(): bool
+    {
+        $expectedKey = trim((string)DB::setting('external_app_key', ''));
+        if ($expectedKey === '') {
+            self::apiError(503, 'integration_disabled', 'External API integration is not configured');
+            return false;
+        }
+        $headerKey = trim((string)($_SERVER['HTTP_X_APP_KEY'] ?? ''));
+        if ($headerKey === '') {
+            $input = self::apiInput();
+            $headerKey = trim((string)($input['app_key'] ?? ''));
+        }
+        if (!hash_equals($expectedKey, $headerKey)) {
+            self::apiError(401, 'unauthorized', 'Invalid external app key');
+            return false;
+        }
+        return true;
+    }
+
+    private static function apiBilling(array $parts): void
+    {
+        if (($parts[0] ?? '') !== 'groups') {
+            self::apiError(404, 'not_found', 'Unknown billing endpoint');
+            return;
+        }
+        $action = $parts[1] ?? '';
+        if ($action !== 'block') {
+            self::apiError(404, 'not_found', 'Unknown billing endpoint');
+            return;
+        }
+        if (self::apiMethod() !== 'POST') {
+            self::apiError(405, 'method_not_allowed', 'POST is required');
+            return;
+        }
+        if (!self::apiExternalAppKeyAuthentication()) {
+            return;
+        }
+
+        $input = self::apiInput();
+        $billingId = trim((string)($input['billingId'] ?? $input['billing_id'] ?? ''));
+        if ($billingId === '') {
+            self::apiError(422, 'validation_failed', 'billingId is required');
+            return;
+        }
+        if (!array_key_exists('blocked', $input)) {
+            self::apiError(422, 'validation_failed', 'blocked is required');
+            return;
+        }
+        $blocked = self::apiBool($input['blocked']) ? 1 : 0;
+
+        $stmt = DB::pdo()->prepare('SELECT id FROM portal_groups WHERE billing_id = ?');
+        $stmt->execute([$billingId]);
+        $groupId = $stmt->fetchColumn();
+        if ($groupId === false || $groupId === null) {
+            self::apiError(404, 'not_found', 'Group not found');
+            return;
+        }
+        $groupId = (int)$groupId;
+
+        DB::pdo()->prepare('UPDATE portal_groups SET blocked = ? WHERE id = ?')->execute([$blocked, $groupId]);
+        Audit::log('group.billing_block', 'group_id=' . $groupId . ' billing_id=' . Audit::cleanValue($billingId, 80) . ' blocked=' . $blocked);
+        self::apiJson(['ok' => true, 'group' => self::apiGroupRow(self::rowById('portal_groups', $groupId), true)]);
     }
 
     private static function formIntArray(string $jsonKey, string $fallbackKey): array
@@ -1009,6 +1124,24 @@ trait AppApiTrait
             return;
         }
         $description = (string)($input['description'] ?? ($current['description'] ?? ''));
+        $billingId = trim((string)($input['billingId'] ?? $input['billing_id'] ?? ($current['billing_id'] ?? '')));
+        if ($billingId !== '') {
+            $first = mb_substr($billingId, 0, 1);
+            $rest = mb_substr($billingId, 1);
+            if (!preg_match('/[A-Za-z0-9_-]/', $first) || preg_match('/[^A-Za-z0-9_.:@\/-]/', $rest)) {
+                self::apiError(422, 'validation_failed', 'billingId must contain only letters, digits, and - _ . : @ /');
+                return;
+            }
+            $stmt = DB::pdo()->prepare('SELECT id FROM portal_groups WHERE billing_id = ?');
+            $stmt->execute([$billingId]);
+            $billingOwner = $stmt->fetchColumn();
+            if ($billingOwner !== false && $billingOwner !== null && (int)$billingOwner !== $id) {
+                self::apiError(409, 'billing_id_exists', 'Another group already uses this billingId', [
+                    'existingGroupId' => (int)$billingOwner,
+                ]);
+                return;
+            }
+        }
         $blocked = self::apiBlockedValue($input, $current);
         $parentId = self::groupParentIdFromInput($input, $current);
         $parentError = self::groupParentValidationError($id, $parentId);
@@ -1024,16 +1157,16 @@ trait AppApiTrait
         $pdo->beginTransaction();
         try {
             if ($id > 0) {
-                $pdo->prepare('UPDATE portal_groups SET parent_group_id=?, name=?, description=?, blocked=? WHERE id=?')
-                    ->execute([$parentId, $name, $description, $blocked, $id]);
+                $pdo->prepare('UPDATE portal_groups SET parent_group_id=?, name=?, description=?, billing_id=?, blocked=? WHERE id=?')
+                    ->execute([$parentId, $name, $description, $billingId !== '' ? $billingId : null, $blocked, $id]);
             } elseif ($explicitId !== null) {
-                $pdo->prepare('INSERT INTO portal_groups(id, parent_group_id, name, description, blocked, created_at) VALUES(?, ?, ?, ?, ?, ?)')
-                    ->execute([$explicitId, $parentId, $name, $description, $blocked, Util::now()]);
+                $pdo->prepare('INSERT INTO portal_groups(id, parent_group_id, name, description, billing_id, blocked, created_at) VALUES(?, ?, ?, ?, ?, ?, ?)')
+                    ->execute([$explicitId, $parentId, $name, $description, $billingId !== '' ? $billingId : null, $blocked, Util::now()]);
                 self::syncPortalGroupIdentityAfterExplicitInsert();
                 $id = $explicitId;
             } else {
-                $pdo->prepare('INSERT INTO portal_groups(parent_group_id, name, description, blocked, created_at) VALUES(?, ?, ?, ?, ?)')
-                    ->execute([$parentId, $name, $description, $blocked, Util::now()]);
+                $pdo->prepare('INSERT INTO portal_groups(parent_group_id, name, description, billing_id, blocked, created_at) VALUES(?, ?, ?, ?, ?, ?)')
+                    ->execute([$parentId, $name, $description, $billingId !== '' ? $billingId : null, $blocked, Util::now()]);
                 $id = DB::lastInsertId('portal_groups');
             }
             $pdo->commit();
@@ -1792,6 +1925,7 @@ trait AppApiTrait
             'parentGroupName' => self::groupName((int)($group['parent_group_id'] ?? 0)),
             'name' => (string)$group['name'],
             'description' => (string)($group['description'] ?? ''),
+            'billingId' => trim((string)($group['billing_id'] ?? '')) !== '' ? trim((string)$group['billing_id']) : null,
             'blocked' => (int)($group['blocked'] ?? 0) === 1,
             'createdAt' => $group['created_at'] ?? null,
         ];
