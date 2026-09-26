@@ -36,6 +36,10 @@ trait VideoWallPages
                 http_response_code(419);
                 return;
             }
+            if (!empty($user['read_only']) && ($user['role'] ?? '') !== 'admin') {
+                http_response_code(403);
+                return;
+            }
             if (Util::post('action') === 'delete' && $wall) {
                 if (Util::post('confirm_delete') !== '1') {
                     http_response_code(422);

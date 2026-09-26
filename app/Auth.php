@@ -63,7 +63,7 @@ final class Auth
         if (!$user) {
             Util::redirect('/login');
         }
-        if (($user['role'] ?? '') !== 'admin' && (int)($user['must_change_password'] ?? 0) === 1) {
+        if (($user['role'] ?? '') !== 'admin' && (int)($user['must_change_password'] ?? 0) === 1 && (int)($user['read_only'] ?? 0) !== 1) {
             $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
             if ($path !== '/onboarding' && $path !== '/logout') {
                 Util::redirect('/onboarding');

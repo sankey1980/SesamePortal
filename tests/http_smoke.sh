@@ -202,9 +202,7 @@ $pdo->prepare('INSERT INTO users(login, password_hash, role, blocked, static_tok
 $plainUserId = \SesamePortal\DB::lastInsertId('users');
 $pdo->prepare('UPDATE users SET hide_archive = 1 WHERE id = ?')
     ->execute([$plainUserId]);
-$pdo->prepare('UPDATE users SET mosaic_enabled = 1 WHERE id = ?')
-    ->execute([$plainUserId]);
-$pdo->prepare('UPDATE users SET can_rename_cameras = 1 WHERE id = ?')
+$pdo->prepare('UPDATE users SET read_only = 0 WHERE id = ?')
     ->execute([$plainUserId]);
 $pdo->prepare('INSERT INTO user_folders(user_id, folder_id) VALUES(?, ?)')
     ->execute([$plainUserId, $smokeFolder1]);
@@ -404,7 +402,7 @@ printf "%s" "$admin_users_page" | grep -F -q 'data-submit-status'
 printf "%s" "$admin_users_page" | grep -F -q 'name="admin_comment"'
 printf "%s" "$admin_users_page" | grep -F -q 'name="phone"'
 printf "%s" "$admin_users_page" | grep -F -q 'name="hide_archive"'
-printf "%s" "$admin_users_page" | grep -F -q 'name="mosaic_enabled"'
+printf "%s" "$admin_users_page" | grep -F -q 'name="read_only"'
 printf "%s" "$admin_users_page" | grep -F -q 'name="folder_id"'
 printf "%s" "$admin_users_page" | grep -q "Все папки"
 printf "%s" "$admin_users_page" | grep -F -q '<th>Комментарий администратора</th>'
@@ -466,6 +464,20 @@ printf "%s" "$admin_groups" | grep -q "camera-picker-dialog"
 printf "%s" "$admin_groups" | grep -q "camera-picker-search"
 printf "%s" "$admin_groups" | grep -F -q 'value="add_camera_to_folder"'
 printf "%s" "$admin_groups" | grep -F -q 'href="/admin/cameras?new=1&amp;back='
+# Users tab: rows link to /admin/users?edit=<user_id>&back=<group tab 3 URL> (never the old edit=1&id= pattern)
+users_tab_plain_id="$(
+  curl -fsS -b "$COOKIE_JAR" "http://127.0.0.1:$PORT/api/portal/v1/users?q=plain-user&pageSize=1" \
+    | php -r '$d=json_decode(stream_get_contents(STDIN), true); echo $d["users"][0]["id"] ?? "";'
+)"
+test -n "$users_tab_plain_id"
+admin_group_users_tab="$(curl -fsS -b "$COOKIE_JAR" "http://127.0.0.1:$PORT/admin/groups?edit=1&tab=3")"
+printf "%s" "$admin_group_users_tab" | grep -F -q 'data-href="/admin/users?edit='
+printf "%s" "$admin_group_users_tab" | grep -F -q "data-href=\"/admin/users?edit=$users_tab_plain_id&amp;back=%2Fadmin%2Fgroups%3Fedit%3D1%26tab%3D3\""
+! printf "%s" "$admin_group_users_tab" | grep -F -q 'data-href="/admin/users?edit=1&amp;id='
+# Back support on user edit page: back link + hidden field
+admin_user_back_page="$(curl -fsS -b "$COOKIE_JAR" "http://127.0.0.1:$PORT/admin/users?edit=$users_tab_plain_id&back=%2Fadmin%2Fgroups%3Fedit%3D1%26tab%3D3&lang=ru")"
+printf "%s" "$admin_user_back_page" | grep -F -q 'name="back" value="/admin/groups?edit=1&amp;tab=3"'
+printf "%s" "$admin_user_back_page" | grep -F -q 'href="/admin/groups?edit=1&amp;tab=3">Назад</a>'
 admin_groups_list="$(curl -fsS -b "$COOKIE_JAR" "http://127.0.0.1:$PORT/admin/groups")"
 printf "%s" "$admin_groups_list" | grep -q "<th>ID</th>"
 printf "%s" "$admin_groups_list" | grep -q "<td>1</td>"
@@ -1671,7 +1683,7 @@ test "$admin_home_status" = "200"
 
 # Onboarding form has must_change_password, email fields
 onboarding_form_page="$(curl -fsS -b "$COOKIE_JAR" "http://127.0.0.1:$PORT/admin/users?edit=3")"
-printf "%s" "$onboarding_form_page" | grep -q 'name="mosaic_enabled"'
+printf "%s" "$onboarding_form_page" | grep -q 'name="read_only"'
 printf "%s" "$onboarding_form_page" | grep -q 'name="hide_archive"'
 
 # Admin users form has email field for viewing/editing user email
@@ -2012,5 +2024,105 @@ plain_relogin="$(curl -sS -o /dev/null -w '%{http_code}' -b /dev/null -c "$STATE
   -d "login=plain-user" -d "password=$NEW_PW" \
   "http://127.0.0.1:$PORT/login")"
 test "$plain_relogin" = "303"
+
+# User edit page with back: POST save (new user, no folders) redirects back to the group users tab
+back_user_csrf="$(curl -fsS -b "$COOKIE_JAR" "http://127.0.0.1:$PORT/admin/users?back=%2Fadmin%2Fgroups%3Fedit%3D1%26tab%3D3&lang=ru" | sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' | head -n 1)"
+back_user_save="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' -b "$COOKIE_JAR" \
+    -d "action=save" -d "id=0" -d "login=back-user" -d "name=Back User" \
+    -d "phone=" -d "email=" -d "password=back-user-pw" -d "role=user" \
+    -d "blocked=0" -d "csrf=$back_user_csrf" \
+    --data-urlencode "back=/admin/groups?edit=1&tab=3" \
+    "http://127.0.0.1:$PORT/admin/users")"
+test "$back_user_save" = "302 http://127.0.0.1:$PORT/admin/groups?edit=1&tab=3"
+
+# --- Read-only mode: single flag replaces mosaic_enabled + can_rename_cameras ---
+# Create a read-only user via API and verify the flag round-trips
+api_readonly_user_status="$(
+  curl -sS -o "$STATE_DIR/api_readonly_user.json" -w '%{http_code}' -b "$COOKIE_JAR" -H 'Content-Type: application/json' \
+    -d '{"login":"ro-user","password":"ro-user-pw","readOnly":true}' \
+    "http://127.0.0.1:$PORT/api/portal/v1/users"
+)"
+test "$api_readonly_user_status" = "201"
+grep -q '"readOnly": true' "$STATE_DIR/api_readonly_user.json"
+ro_user_id="$(php -r '$d=json_decode(file_get_contents($argv[1]), true); echo (string)($d["user"]["id"] ?? "");' "$STATE_DIR/api_readonly_user.json")"
+test -n "$ro_user_id"
+# Default for a new user is full access (readOnly: false)
+api_full_user_status="$(
+  curl -sS -o "$STATE_DIR/api_full_user.json" -w '%{http_code}' -b "$COOKIE_JAR" -H 'Content-Type: application/json' \
+    -d '{"login":"full-user","password":"full-user-pw"}' \
+    "http://127.0.0.1:$PORT/api/portal/v1/users"
+)"
+test "$api_full_user_status" = "201"
+grep -q '"readOnly": false' "$STATE_DIR/api_full_user.json"
+
+# Log in as the read-only user
+RO_COOKIE_JAR="$STATE_DIR/ro-cookies.txt"
+ro_login="$(curl -sS -o /dev/null -w '%{http_code}' -c "$RO_COOKIE_JAR" \
+  -d "login=ro-user" -d "password=ro-user-pw" \
+  "http://127.0.0.1:$PORT/login")"
+test "$ro_login" = "303"
+# Read-only user cannot save mosaics
+ro_mosaic_page="$(curl -sS -o /dev/null -w '%{http_code}' -b "$RO_COOKIE_JAR" "http://127.0.0.1:$PORT/mosaic")"
+test "$ro_mosaic_page" = "403"
+# Read-only user cannot rename cameras
+ro_rename_page="$(curl -sS -o /dev/null -w '%{http_code}' -b "$RO_COOKIE_JAR" "http://127.0.0.1:$PORT/camera/rename?id=1")"
+test "$ro_rename_page" = "403"
+# Read-only user cannot create video walls (POST guarded)
+ro_wall_csrf="$(curl -fsS -b "$RO_COOKIE_JAR" "http://127.0.0.1:$PORT/video-walls/edit" | grep -oP 'SESAME_CSRF = "\K[^"]+' | head -1)"
+ro_wall_status="$(curl -sS -o /dev/null -w '%{http_code}' -b "$RO_COOKIE_JAR" \
+  -d "csrf=$ro_wall_csrf" -d "name=RO Wall" -d "rows=1" -d "columns=1" -d "cameraIds[]=1" \
+  "http://127.0.0.1:$PORT/video-walls")"
+test "$ro_wall_status" = "403"
+# Read-only user cannot edit their profile
+ro_profile_csrf="$(curl -fsS -b "$RO_COOKIE_JAR" "http://127.0.0.1:$PORT/profile?lang=ru" | grep -oP 'SESAME_CSRF = "\K[^"]+' | head -1)"
+ro_profile_html="$(curl -fsS -b "$RO_COOKIE_JAR" \
+  -d "name=Hacked Name" -d "email=ro@example.com" -d "phone=" -d "new_password=" -d "confirm_password=" -d "csrf=$ro_profile_csrf" \
+  "http://127.0.0.1:$PORT/profile?lang=ru")"
+grep -q "Профиль доступен только для чтения" <<<"$ro_profile_html"
+ro_name_db="$(OB_ID="$ro_user_id" php -r 'require getenv("ROOT") . "/app/Portal.php"; $id=(int)getenv("OB_ID"); echo (string)\SesamePortal\DB::pdo()->query("SELECT name FROM users WHERE id=$id")->fetch(PDO::FETCH_COLUMN);')"
+test "$ro_name_db" = ""
+# Read-only profile form renders disabled fields and no submit button
+ro_profile_get="$(curl -fsS -b "$RO_COOKIE_JAR" "http://127.0.0.1:$PORT/profile?lang=ru")"
+grep -q 'name="name"[^>]*readonly disabled' <<<"$ro_profile_get"
+! grep -q 'type="submit"' <<<"$ro_profile_get"
+# Read-only user with must_change_password is NOT forced into onboarding and cannot change password via /reset
+OB_ID="$ro_user_id" php -r 'require getenv("ROOT") . "/app/Portal.php"; \SesamePortal\DB::pdo()->exec("UPDATE users SET must_change_password = 1, password_reset_token = '"'"'ro-reset-token'"'"' WHERE id = " . (int)getenv("OB_ID"));'
+ro_home_status="$(curl -sS -o /dev/null -w '%{http_code}' -b "$RO_COOKIE_JAR" "http://127.0.0.1:$PORT/")"
+test "$ro_home_status" = "200"
+# Reset token is rejected for read-only users
+ro_reset_page="$(curl -fsS "http://127.0.0.1:$PORT/reset?token=ro-reset-token&lang=ru")"
+grep -q "Неверная ссылка сброса" <<<"$ro_reset_page"
+# Forgot password does not issue a token for read-only users
+OB_ID="$ro_user_id" php -r 'require getenv("ROOT") . "/app/Portal.php"; \SesamePortal\DB::pdo()->exec("UPDATE users SET email = '"'"'ro-forgot@example.com'"'"' WHERE id = " . (int)getenv("OB_ID"));'
+ro_forgot_csrf="$(curl -fsS -b "$RO_COOKIE_JAR" "http://127.0.0.1:$PORT/forgot?lang=ru" | grep -oP 'SESAME_CSRF = "\K[^"]+' | head -1)"
+forgot_ro_status="$(curl -sS -o /dev/null -w '%{http_code}' -b "$RO_COOKIE_JAR" \
+  -d "email=ro-forgot@example.com" -d "csrf=$ro_forgot_csrf" \
+  "http://127.0.0.1:$PORT/forgot")"
+test "$forgot_ro_status" = "200"
+ro_reset_token_db="$(OB_ID="$ro_user_id" php -r 'require getenv("ROOT") . "/app/Portal.php"; $id=(int)getenv("OB_ID"); $v=\SesamePortal\DB::pdo()->query("SELECT password_reset_token FROM users WHERE id=$id")->fetch(PDO::FETCH_COLUMN); echo ($v === null || $v === false) ? "null" : (string)$v;')"
+test "$ro_reset_token_db" = "ro-reset-token"
+# Admin form shows the read_only checkbox checked for the read-only user
+admin_ro_edit="$(curl -fsS -b "$COOKIE_JAR" "http://127.0.0.1:$PORT/admin/users?edit=$ro_user_id&lang=ru")"
+grep -q 'name="read_only" checked' <<<"$admin_ro_edit"
+# Admin can grant full access by unchecking the flag
+admin_ro_csrf="$(printf "%s" "$admin_ro_edit" | sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' | head -n 1)"
+admin_ro_save="$(curl -fsS -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
+  -d "csrf=$admin_ro_csrf" -d "action=save" -d "id=$ro_user_id" \
+  -d "login=ro-user" -d "email=ro-forgot@example.com" -d "password=" -d "role=user" \
+  -d "folder_ids_json=" \
+  "http://127.0.0.1:$PORT/admin/users")"
+grep -q "Пользователь сохранён" <<<"$admin_ro_save"
+ro_flag_db="$(OB_ID="$ro_user_id" php -r 'require getenv("ROOT") . "/app/Portal.php"; $id=(int)getenv("OB_ID"); echo (string)\SesamePortal\DB::pdo()->query("SELECT read_only FROM users WHERE id=$id")->fetch(PDO::FETCH_COLUMN);')"
+test "$ro_flag_db" = "0"
+# Clear the forced password change (set earlier in this block) before checking the profile renders editable
+OB_ID="$ro_user_id" php -r 'require getenv("ROOT") . "/app/Portal.php"; \SesamePortal\DB::pdo()->exec("UPDATE users SET must_change_password = 0 WHERE id = " . (int)getenv("OB_ID"));'
+# After granting access, profile is editable again
+ro_profile_after="$(curl -fsS -b "$RO_COOKIE_JAR" "http://127.0.0.1:$PORT/profile?lang=ru")"
+grep -q 'type="submit"' <<<"$ro_profile_after"
+# Legacy columns are gone after migration (SQLite-only check; PRAGMA is not portable)
+if [[ -z "${SESAME_PORTAL_DB_DSN:-}" ]]; then
+    ro_legacy_cols="$(php -r 'require getenv("ROOT") . "/app/Portal.php"; $cols=\SesamePortal\DB::pdo()->query("PRAGMA table_info(users)")->fetchAll(PDO::FETCH_COLUMN, 1); echo in_array("mosaic_enabled", $cols, true) || in_array("can_rename_cameras", $cols, true) ? "present" : "dropped";')"
+    test "$ro_legacy_cols" = "dropped"
+fi
 
 echo "http smoke ok"

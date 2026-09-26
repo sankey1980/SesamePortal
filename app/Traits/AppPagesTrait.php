@@ -569,7 +569,8 @@ trait AppPagesTrait
     private static function onboarding(): void
     {
         $user = Auth::requireLogin();
-        if ((int)($user['must_change_password'] ?? 0) !== 1) {
+        $isReadOnly = ($user['role'] ?? '') !== 'admin' && !empty($user['read_only']);
+        if ((int)($user['must_change_password'] ?? 0) !== 1 || $isReadOnly) {
             Util::redirect('/');
         }
         $error = '';
@@ -614,64 +615,72 @@ trait AppPagesTrait
     {
         $user = Auth::requireLogin();
         $userId = (int)$user['id'];
+        $readOnly = ($user['role'] ?? '') !== 'admin' && !empty($user['read_only']);
         $message = '';
         $messageClass = '';
         if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
-            $name = trim((string)Util::post('name'));
-            $email = trim((string)Util::post('email'));
-            $phoneInput = (string)Util::post('phone');
-            $phone = $phoneInput !== '' ? self::normalizePhone($phoneInput) : '';
-            $newPassword = (string)Util::post('new_password');
-            $confirmPassword = (string)Util::post('confirm_password');
-            $passwordMissing = ($newPassword === '') !== ($confirmPassword === '');
-            if (mb_strlen($name) > 255) {
-                $message = self::t('profile.nameTooLong', 'Имя слишком длинное');
-            } elseif ($phoneInput !== '' && $phone === '') {
-                $message = self::t('users.phoneInvalid', 'Некорректный номер телефона');
-            } elseif ($phone !== '' && self::phoneTakenByOther($phone, $userId)) {
-                $message = self::t('users.phoneInUse', 'Этот номер телефона уже занят другим пользователем');
-            } elseif ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-                $message = self::t('auth.emailInvalid', 'Введите корректный email');
-            } elseif ($email !== '' && self::emailTakenByOther($email, $userId)) {
-                $message = self::t('auth.emailInUse', 'Этот email уже занят другим пользователем');
-            } elseif ($passwordMissing) {
-                $message = self::t('profile.passwordFillBoth', 'Заполните оба поля пароля');
-            } elseif ($newPassword !== '' && strlen($newPassword) < 6) {
-                $message = self::t('auth.passwordShort', 'Пароль должен быть не короче 6 символов');
-            } elseif ($newPassword !== '' && $newPassword !== $confirmPassword) {
-                $message = self::t('auth.passwordMismatch', 'Пароли не совпадают');
+            if ($readOnly) {
+                $message = self::t('profile.readOnly', 'Профиль доступен только для чтения');
+                $messageClass = 'danger';
             } else {
-                if ($newPassword !== '') {
-                    DB::pdo()->prepare('UPDATE users SET name=?, email=?, phone=?, password_hash=? WHERE id=?')
-                        ->execute([$name, $email, $phone, password_hash($newPassword, PASSWORD_DEFAULT), $userId]);
-                    Auth::clearAllRememberMeTokens($userId);
-                    Audit::logForUser($userId, 'user.profile.update', 'password changed, name=' . Audit::cleanValue($name));
+                $name = trim((string)Util::post('name'));
+                $email = trim((string)Util::post('email'));
+                $phoneInput = (string)Util::post('phone');
+                $phone = $phoneInput !== '' ? self::normalizePhone($phoneInput) : '';
+                $newPassword = (string)Util::post('new_password');
+                $confirmPassword = (string)Util::post('confirm_password');
+                $passwordMissing = ($newPassword === '') !== ($confirmPassword === '');
+                if (mb_strlen($name) > 255) {
+                    $message = self::t('profile.nameTooLong', 'Имя слишком длинное');
+                } elseif ($phoneInput !== '' && $phone === '') {
+                    $message = self::t('users.phoneInvalid', 'Некорректный номер телефона');
+                } elseif ($phone !== '' && self::phoneTakenByOther($phone, $userId)) {
+                    $message = self::t('users.phoneInUse', 'Этот номер телефона уже занят другим пользователем');
+                } elseif ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                    $message = self::t('auth.emailInvalid', 'Введите корректный email');
+                } elseif ($email !== '' && self::emailTakenByOther($email, $userId)) {
+                    $message = self::t('auth.emailInUse', 'Этот email уже занят другим пользователем');
+                } elseif ($passwordMissing) {
+                    $message = self::t('profile.passwordFillBoth', 'Заполните оба поля пароля');
+                } elseif ($newPassword !== '' && strlen($newPassword) < 6) {
+                    $message = self::t('auth.passwordShort', 'Пароль должен быть не короче 6 символов');
+                } elseif ($newPassword !== '' && $newPassword !== $confirmPassword) {
+                    $message = self::t('auth.passwordMismatch', 'Пароли не совпадают');
                 } else {
-                    DB::pdo()->prepare('UPDATE users SET name=?, email=?, phone=? WHERE id=?')
-                        ->execute([$name, $email, $phone, $userId]);
-                    Audit::logForUser($userId, 'user.profile.update', 'name=' . Audit::cleanValue($name));
-                }
-                $message = self::t('profile.saved', 'Профиль сохранён');
-                $messageClass = 'success';
-                foreach (['name', 'email', 'phone'] as $column) {
-                    $user[$column] = $column === 'phone' ? $phone : ($column === 'name' ? $name : $email);
+                    if ($newPassword !== '') {
+                        DB::pdo()->prepare('UPDATE users SET name=?, email=?, phone=?, password_hash=? WHERE id=?')
+                            ->execute([$name, $email, $phone, password_hash($newPassword, PASSWORD_DEFAULT), $userId]);
+                        Auth::clearAllRememberMeTokens($userId);
+                        Audit::logForUser($userId, 'user.profile.update', 'password changed, name=' . Audit::cleanValue($name));
+                    } else {
+                        DB::pdo()->prepare('UPDATE users SET name=?, email=?, phone=? WHERE id=?')
+                            ->execute([$name, $email, $phone, $userId]);
+                        Audit::logForUser($userId, 'user.profile.update', 'name=' . Audit::cleanValue($name));
+                    }
+                    $message = self::t('profile.saved', 'Профиль сохранён');
+                    $messageClass = 'success';
+                    foreach (['name', 'email', 'phone'] as $column) {
+                        $user[$column] = $column === 'phone' ? $phone : ($column === 'name' ? $name : $email);
+                    }
                 }
             }
         }
-        self::layout(self::t('profile.title', 'Профиль'), function () use ($user, $message, $messageClass): void {
+        self::layout(self::t('profile.title', 'Профиль'), function () use ($user, $message, $messageClass, $readOnly): void {
             self::notice($message, $messageClass);
             echo '<section class="panel"><div class="section-head"><h2>' . Util::h(self::t('profile.title', 'Профиль')) . '</h2><p class="muted">' . Util::h(self::t('profile.description', 'Отредактируйте личные данные и параметры входа')) . '</p></div>';
             echo '<form method="post" class="form profile-form">' . Csrf::field();
             echo '<label>' . self::t('field.login', 'Логин') . '<input name="login" value="' . Util::h((string)$user['login']) . '" readonly disabled></label>';
             echo '<p class="field-hint">' . Util::h(self::t('profile.loginReadonly', 'Логин изменить нельзя.')) . '</p>';
-            echo '<label>' . self::t('profile.name', 'Имя') . '<input name="name" value="' . Util::h((string)($user['name'] ?? '')) . '" maxlength="255"></label>';
-            echo '<label>' . self::t('auth.email', 'Email') . '<input name="email" type="email" value="' . Util::h((string)($user['email'] ?? '')) . '" placeholder="user@example.com" autocomplete="email"></label>';
-            echo '<label>' . self::t('field.phone', 'Номер телефона') . '<input name="phone" type="tel" value="' . Util::h((string)($user['phone'] ?? '')) . '" placeholder="+7 ___ ___-__-__" autocomplete="tel"></label>';
+            echo '<label>' . self::t('profile.name', 'Имя') . '<input name="name" value="' . Util::h((string)($user['name'] ?? '')) . '" maxlength="255"' . ($readOnly ? ' readonly disabled' : '') . '></label>';
+            echo '<label>' . self::t('auth.email', 'Email') . '<input name="email" type="email" value="' . Util::h((string)($user['email'] ?? '')) . '" placeholder="user@example.com" autocomplete="email"' . ($readOnly ? ' readonly disabled' : '') . '></label>';
+            echo '<label>' . self::t('field.phone', 'Номер телефона') . '<input name="phone" type="tel" value="' . Util::h((string)($user['phone'] ?? '')) . '" placeholder="+7 ___ ___-__-__" autocomplete="tel"' . ($readOnly ? ' readonly disabled' : '') . '></label>';
             echo '</section>';
             echo '<section class="panel"><div class="section-head"><h2>' . Util::h(self::t('profile.passwordTitle', 'Смена пароля')) . '</h2><p class="muted">' . Util::h(self::t('profile.passwordDescription', 'Оставьте поля пустыми, чтобы не менять пароль.')) . '</p></div>';
-            echo '<label>' . self::t('auth.newPassword', 'Новый пароль') . '<input name="new_password" type="password" minlength="6" autocomplete="new-password"></label>';
-            echo '<label>' . self::t('auth.confirmPassword', 'Подтверждение') . '<input name="confirm_password" type="password" autocomplete="new-password"></label>';
-            echo '<div class="form-submit-row"><button type="submit" class="primary">' . self::t('action.save', 'Сохранить') . '</button></div>';
+            echo '<label>' . self::t('auth.newPassword', 'Новый пароль') . '<input name="new_password" type="password" minlength="6" autocomplete="new-password"' . ($readOnly ? ' readonly disabled' : '') . '></label>';
+            echo '<label>' . self::t('auth.confirmPassword', 'Подтверждение') . '<input name="confirm_password" type="password" autocomplete="new-password"' . ($readOnly ? ' readonly disabled' : '') . '></label>';
+            if (!$readOnly) {
+                echo '<div class="form-submit-row"><button type="submit" class="primary">' . self::t('action.save', 'Сохранить') . '</button></div>';
+            }
             echo '</form>';
             echo '</section>';
         });
@@ -687,7 +696,7 @@ trait AppPagesTrait
                 $message = self::t('auth.emailInvalid', 'Введите корректный email');
                 $messageClass = 'danger';
             } else {
-                $stmt = DB::pdo()->prepare('SELECT id, login FROM users WHERE email = ? AND blocked = 0');
+                $stmt = DB::pdo()->prepare('SELECT id, login FROM users WHERE email = ? AND blocked = 0 AND read_only = 0');
                 $stmt->execute([$email]);
                 $u = $stmt->fetch();
                 if ($u) {
@@ -730,7 +739,7 @@ trait AppPagesTrait
         $token = (string)($_GET['token'] ?? '');
         $error = '';
         $valid = false;
-        $stmt = DB::pdo()->prepare('SELECT id, login, password_reset_expires FROM users WHERE password_reset_token = ? AND blocked = 0');
+        $stmt = DB::pdo()->prepare('SELECT id, login, password_reset_expires FROM users WHERE password_reset_token = ? AND blocked = 0 AND read_only = 0');
         $stmt->execute([$token]);
         $u = $stmt->fetch();
         if (!$u) {
@@ -794,8 +803,7 @@ trait AppPagesTrait
                 $role = Util::post('role') === 'admin' ? 'admin' : 'user';
                 $blocked = Util::checkbox('blocked');
                 $hideArchive = Util::checkbox('hide_archive');
-                $mosaicEnabled = Util::checkbox('mosaic_enabled');
-                $canRenameCameras = Util::checkbox('can_rename_cameras');
+                $readOnly = Util::checkbox('read_only');
                 $beforeUser = $id > 0 ? self::rowById('users', $id) : null;
                 $mustChangePassword = $id === 0
                     ? ($role === 'user' ? 1 : 0)
@@ -829,16 +837,16 @@ trait AppPagesTrait
                             if (strlen($password) < 6) {
                                 $message = self::t('users.passwordShort', 'Пароль должен быть не короче 6 символов');
                             } else {
-                                $pdo->prepare('UPDATE users SET login=?, name=?, phone=?, email=?, password_hash=?, role=?, blocked=?, hide_archive=?, mosaic_enabled=?, can_rename_cameras=?, must_change_password=?, admin_comment=? WHERE id=?')
-                                    ->execute([$login, $name, $phone, $email, password_hash($password, PASSWORD_DEFAULT), $role, $blocked, $hideArchive, $mosaicEnabled, $canRenameCameras, $mustChangePassword, $adminComment, $id]);
+                                $pdo->prepare('UPDATE users SET login=?, name=?, phone=?, email=?, password_hash=?, role=?, blocked=?, hide_archive=?, read_only=?, must_change_password=?, admin_comment=? WHERE id=?')
+                                    ->execute([$login, $name, $phone, $email, password_hash($password, PASSWORD_DEFAULT), $role, $blocked, $hideArchive, $readOnly, $mustChangePassword, $adminComment, $id]);
                             }
                         } else {
-                            $pdo->prepare('UPDATE users SET login=?, name=?, phone=?, email=?, role=?, blocked=?, hide_archive=?, mosaic_enabled=?, can_rename_cameras=?, must_change_password=?, admin_comment=? WHERE id=?')
-                                ->execute([$login, $name, $phone, $email, $role, $blocked, $hideArchive, $mosaicEnabled, $canRenameCameras, $mustChangePassword, $adminComment, $id]);
+                            $pdo->prepare('UPDATE users SET login=?, name=?, phone=?, email=?, role=?, blocked=?, hide_archive=?, read_only=?, must_change_password=?, admin_comment=? WHERE id=?')
+                                ->execute([$login, $name, $phone, $email, $role, $blocked, $hideArchive, $readOnly, $mustChangePassword, $adminComment, $id]);
                         }
                     } else {
-                        $pdo->prepare('INSERT INTO users(login, name, phone, email, password_hash, role, blocked, hide_archive, mosaic_enabled, can_rename_cameras, must_change_password, admin_comment, daily_token, daily_token_date, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-                            ->execute([$login, $name, $phone, $email, password_hash($password, PASSWORD_DEFAULT), $role, $blocked, $hideArchive, $mosaicEnabled, $canRenameCameras, $mustChangePassword, $adminComment, Util::randomToken(), TokenService::today(), Util::now()]);
+                        $pdo->prepare('INSERT INTO users(login, name, phone, email, password_hash, role, blocked, hide_archive, read_only, must_change_password, admin_comment, daily_token, daily_token_date, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+                            ->execute([$login, $name, $phone, $email, password_hash($password, PASSWORD_DEFAULT), $role, $blocked, $hideArchive, $readOnly, $mustChangePassword, $adminComment, Util::randomToken(), TokenService::today(), Util::now()]);
                         $id = DB::lastInsertId('users');
                     }
                     if ($message === '') {
@@ -846,6 +854,11 @@ trait AppPagesTrait
                         $afterUser = self::rowById('users', $id) ?: ['login' => $login, 'phone' => $phone, 'role' => $role, 'blocked' => $blocked, 'hide_archive' => $hide_archive];
                         $afterFolderIds = self::linkedIds('user_folders', 'user_id', $id, 'folder_id');
                         self::logUserSaveAudit(null, $id, $beforeUser, $afterUser, $beforeFolderIds, $afterFolderIds);
+                        $backTarget = $generatedPassword !== '' ? '' : self::safeLocalPath((string)Util::post('back', ''));
+                        if ($backTarget !== '') {
+                            header('Location: ' . $backTarget);
+                            exit;
+                        }
                         $message = self::t('users.saveDone', 'Пользователь сохранён');
                         if ($generatedPassword !== '') {
                             $message .= ' ' . self::t('users.defaultPasswordGenerated', 'Временный пароль') . ': ' . $generatedPassword;
@@ -868,14 +881,22 @@ trait AppPagesTrait
         $folders = Repo::allFolders();
         $list = self::filteredUsers();
         $users = $list['rows'];
-        self::layout(self::t('users.title', 'Пользователи'), function () use ($users, $edit, $folders, $linkedFolders, $message, $messageClass, $list) {
+        $backPath = self::safeLocalPath((string)($_GET['back'] ?? ''));
+        self::layout(self::t('users.title', 'Пользователи'), function () use ($users, $edit, $folders, $linkedFolders, $message, $messageClass, $list, $backPath) {
             self::notice($message, $messageClass);
             echo '<div class="user-admin-stack">';
             echo '<details class="panel user-create-panel"' . ($edit ? ' open' : '') . '>';
-            echo '<summary><h2>' . ($edit ? self::t('users.edit', 'Изменить пользователя') : self::t('users.new', 'Новый пользователь')) . '</h2></summary>';
+            echo '<summary><h2>' . ($edit ? self::t('users.edit', 'Изменить пользователя') : self::t('users.new', 'Новый пользователь')) . '</h2>';
+            if ($backPath !== '') {
+                echo '<a class="btn" href="' . Util::h($backPath) . '">' . self::t('action.back', 'Назад') . '</a>';
+            }
+            echo '</summary>';
             $savingLabel = self::t('users.saving', 'Сохраняем пользователя...');
             echo '<form method="post" class="form" data-submit-progress="' . Util::h($savingLabel) . '">' . Csrf::field();
             echo '<input type="hidden" name="action" value="save"><input type="hidden" name="id" value="' . Util::h($edit['id'] ?? 0) . '">';
+            if ($backPath !== '') {
+                echo '<input type="hidden" name="back" value="' . Util::h($backPath) . '">';
+            }
             echo '<label>' . self::t('field.login', 'Логин') . '<input name="login" value="' . Util::h($edit['login'] ?? '') . '" required></label>';
             echo '<label>' . self::t('profile.name', 'Имя') . '<input name="name" value="' . Util::h($edit['name'] ?? '') . '" maxlength="255"></label>';
             echo '<label>' . self::t('field.phone', 'Номер телефона') . '<input name="phone" type="tel" value="' . Util::h($edit['phone'] ?? '') . '" placeholder="+7 ___ ___-__-__"></label>';
@@ -911,8 +932,7 @@ trait AppPagesTrait
             echo '<label>' . self::t('users.adminComment', 'Комментарий администратора') . '<textarea name="admin_comment" rows="3">' . Util::h($edit['admin_comment'] ?? '') . '</textarea></label>';
             echo '<label class="check"><input type="checkbox" name="blocked" ' . (!empty($edit['blocked']) ? 'checked' : '') . '> ' . self::t('users.blocked', 'Заблокирован') . '</label>';
             echo '<label class="check"><input type="checkbox" name="hide_archive" ' . (!empty($edit['hide_archive']) ? 'checked' : '') . '> ' . self::t('users.hideArchive', 'Скрывать архив') . '</label>';
-            echo '<label class="check"><input type="checkbox" name="mosaic_enabled" ' . (!empty($edit['mosaic_enabled']) ? 'checked' : '') . '> ' . self::t('users.mosaicEnabled', 'Разрешить создание мозаик') . '</label>';
-            echo '<label class="check"><input type="checkbox" name="can_rename_cameras" ' . (!empty($edit['can_rename_cameras']) ? 'checked' : '') . '> ' . self::t('users.canRenameCameras', 'Разрешить переименование камер') . '</label>';
+            echo '<label class="check"><input type="checkbox" name="read_only" ' . (!empty($edit['read_only']) ? 'checked' : '') . '> ' . self::t('users.readOnly', 'Режим только для чтения') . '</label>';
             self::folderCheckboxTree(self::t('folders.title', 'Папки'), 'folder_ids[]', $folders, $linkedFolders, 'folder_ids_json');
             echo '<div class="form-submit-row"><button type="submit" class="primary" data-submit-button>' . self::t('action.save', 'Сохранить') . '</button><div class="submit-progress" data-submit-status hidden role="status" aria-live="polite">' . Util::h($savingLabel) . '</div></div></form>';
             if ($edit) {

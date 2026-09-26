@@ -79,8 +79,8 @@ final class DB
         self::ensureColumn('users', 'static_token_enc', 'TEXT');
         self::ensureColumn('users', 'hide_archive', 'INTEGER NOT NULL DEFAULT 0');
         self::ensureColumn('users', 'mosaic_columns', 'INTEGER NOT NULL DEFAULT 3');
-        self::ensureColumn('users', 'mosaic_enabled', 'INTEGER NOT NULL DEFAULT 0');
-        self::ensureColumn('users', 'can_rename_cameras', 'INTEGER NOT NULL DEFAULT 0');
+        self::ensureColumn('users', 'read_only', 'INTEGER NOT NULL DEFAULT 0');
+        self::migrateUsersReadOnly();
         self::ensureColumn('users', 'theme', "TEXT NOT NULL DEFAULT ''");
         self::ensureColumn('users', 'email', 'TEXT');
         self::ensureColumn('users', 'phone', self::driver() === 'mysql' ? 'VARCHAR(32)' : 'TEXT');
@@ -290,8 +290,7 @@ final class DB
                 admin_comment TEXT,
                 hide_archive INTEGER NOT NULL DEFAULT 0,
                 mosaic_columns INTEGER NOT NULL DEFAULT 3,
-                mosaic_enabled INTEGER NOT NULL DEFAULT 0,
-                can_rename_cameras INTEGER NOT NULL DEFAULT 0,
+                read_only INTEGER NOT NULL DEFAULT 0,
                 email TEXT,
                 must_change_password INTEGER NOT NULL DEFAULT 0,
                 password_reset_token TEXT,
@@ -451,8 +450,7 @@ final class DB
                 admin_comment TEXT,
                 hide_archive INTEGER NOT NULL DEFAULT 0,
                 mosaic_columns INTEGER NOT NULL DEFAULT 3,
-                mosaic_enabled INTEGER NOT NULL DEFAULT 0,
-                can_rename_cameras INTEGER NOT NULL DEFAULT 0,
+                read_only INTEGER NOT NULL DEFAULT 0,
                 email TEXT,
                 must_change_password INTEGER NOT NULL DEFAULT 0,
                 password_reset_token TEXT,
@@ -613,8 +611,7 @@ final class DB
                 admin_comment TEXT,
                 hide_archive INTEGER NOT NULL DEFAULT 0,
                 mosaic_columns INTEGER NOT NULL DEFAULT 3,
-                mosaic_enabled INTEGER NOT NULL DEFAULT 0,
-                can_rename_cameras INTEGER NOT NULL DEFAULT 0,
+                read_only INTEGER NOT NULL DEFAULT 0,
                 email TEXT,
                 must_change_password INTEGER NOT NULL DEFAULT 0,
                 password_reset_token TEXT,
@@ -1086,6 +1083,28 @@ final class DB
         }
 
         $pdo->exec('ALTER TABLE ' . $table . ' ADD COLUMN ' . $column . ' ' . $definition);
+    }
+
+    /**
+     * Единый флаг read_only заменяет пару mosaic_enabled / can_rename_cameras.
+     * Полный доступ (read_only = 0) сохраняется только у тех, у кого были
+     * включены ОБА старых флага; всем остальным выставляется read_only = 1.
+     * Затем старые колонки удаляются. Для новой БД без старых колонок — no-op.
+     */
+    private static function migrateUsersReadOnly(): void
+    {
+        $pdo = self::pdo();
+        $hasMosaicEnabled = self::columnExists('users', 'mosaic_enabled');
+        $hasCanRename = self::columnExists('users', 'can_rename_cameras');
+        if ($hasMosaicEnabled && $hasCanRename) {
+            $pdo->exec('UPDATE users SET read_only = 1 WHERE NOT (mosaic_enabled = 1 AND can_rename_cameras = 1)');
+        }
+        if ($hasMosaicEnabled) {
+            $pdo->exec('ALTER TABLE users DROP COLUMN mosaic_enabled');
+        }
+        if ($hasCanRename) {
+            $pdo->exec('ALTER TABLE users DROP COLUMN can_rename_cameras');
+        }
     }
 
     private static function ensureIndex(string $table, string $index, string $column): void

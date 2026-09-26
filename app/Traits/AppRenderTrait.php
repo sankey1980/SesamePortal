@@ -42,7 +42,7 @@ trait AppRenderTrait
             echo '<div class="nav-section">' . Util::h(self::t('nav.section.view', 'Просмотр')) . '</div><nav class="nav">';
             $viewerFilter = (string)($_GET['filter'] ?? 'all');
             self::navLink('/', self::t('nav.cameras', 'Камеры'), 'grid', Util::path() === '/' && $viewerFilter !== 'favorites');
-            if (($user['role'] ?? '') === 'admin' || (int)($user['mosaic_enabled'] ?? 0) === 1) {
+            if (($user['role'] ?? '') === 'admin' || empty($user['read_only'])) {
                 self::navLink('/mosaic', self::t('nav.mosaic', 'Мозаика'), 'grid', Util::path() === '/mosaic');
                 self::navLink('/video-walls', self::t('wall.title', 'Видеостена'), 'dashboard', str_starts_with(Util::path(), '/video-walls'));
             }
@@ -67,7 +67,7 @@ trait AppRenderTrait
             $initial = strtoupper(mb_substr($displayName, 0, 1) ?: 'U');
             $toggleIcon = $theme === 'dark' ? 'sun' : 'moon';
             $profileHref = $user['role'] === 'admin'
-                ? '/admin/users?edit=1&id=' . (int)$user['id']
+                ? '/admin/users?edit=' . (int)$user['id']
                 : '/profile';
             echo '<main class="main workspace"><div class="topbar"><div class="topbar-left"><button type="button" class="nav-toggle" data-nav-toggle aria-label="' . Util::h(self::t('nav.toggle', 'Меню')) . '" aria-expanded="false">' . self::icon('menu') . '</button><h1>' . Util::h($title) . '</h1></div><div class="topbar-actions"><button type="button" class="theme-toggle" data-theme-toggle title="' . Util::h(self::t('nav.theme', 'Тема')) . '" aria-label="' . Util::h(self::t('nav.theme', 'Тема')) . '" data-title-light="' . Util::h(self::t('nav.theme.toLight', 'Включить светлую тему')) . '" data-title-dark="' . Util::h(self::t('nav.theme.toDark', 'Включить тёмную тему')) . '">' . self::icon($toggleIcon) . '</button><div class="user-dropdown"><button type="button" class="user" data-user-menu-toggle aria-haspopup="menu" aria-expanded="false" title="' . Util::h(self::t('nav.profile', 'Профиль')) . '" aria-label="' . Util::h(self::t('nav.profile', 'Профиль')) . '">' . Util::h($initial) . '</button><div class="user-menu" role="menu"><a role="menuitem" href="' . Util::h($profileHref) . '">' . self::icon('user') . self::t('nav.profile', 'Профиль') . '</a><a role="menuitem" href="/logout">' . self::icon('logout') . self::t('nav.logout', 'Выход') . '</a></div></div></div></div>';
             if ($user['role'] === 'admin') {
@@ -529,8 +529,8 @@ trait AppRenderTrait
 
         foreach ($groupUsers as $u) {
             $folderNames = Repo::folderNamesForUserInGroup((int)$u['id'], $groupId);
-            $back = '/admin/groups?edit=1&tab=3';
-            echo '<tr data-href="/admin/users?edit=1&amp;id=' . (int)$u['id'] . '&amp;back=' . rawurlencode($back) . '">';
+            $back = '/admin/groups?edit=' . $groupId . '&tab=3';
+            echo '<tr data-href="/admin/users?edit=' . (int)$u['id'] . '&amp;back=' . rawurlencode($back) . '">';
             echo '<td>' . Util::h($u['login']) . '</td>';
             $roleClass = ($u['role'] ?? '') === 'admin' ? 'success' : '';
             echo '<td><span class="pill ' . $roleClass . '">' . Util::h($u['role'] ?? 'user') . '</span></td>';

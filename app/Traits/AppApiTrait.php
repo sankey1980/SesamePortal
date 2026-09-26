@@ -608,11 +608,12 @@ trait AppApiTrait
 
     private static function apiBilling(array $parts): void
     {
-        if (($parts[0] ?? '') !== 'groups') {
+        // $parts = ['billing', 'groups', 'block']
+        if (($parts[1] ?? '') !== 'groups') {
             self::apiError(404, 'not_found', 'Unknown billing endpoint');
             return;
         }
-        $action = $parts[1] ?? '';
+        $action = $parts[2] ?? '';
         if ($action !== 'block') {
             self::apiError(404, 'not_found', 'Unknown billing endpoint');
             return;
@@ -834,10 +835,10 @@ trait AppApiTrait
             array_key_exists('hideArchive', $input) || array_key_exists('hide_archive', $input)
                 ? (self::apiBool($input['hideArchive'] ?? $input['hide_archive']) ? 1 : 0)
                 : (int)($current['hide_archive'] ?? 0);
-        $canRenameCameras =
-            array_key_exists('canRenameCameras', $input) || array_key_exists('can_rename_cameras', $input)
-                ? (self::apiBool($input['canRenameCameras'] ?? $input['can_rename_cameras']) ? 1 : 0)
-                : (int)($current['can_rename_cameras'] ?? 0);
+        $readOnly =
+            array_key_exists('readOnly', $input) || array_key_exists('read_only', $input)
+                ? (self::apiBool($input['readOnly'] ?? $input['read_only']) ? 1 : 0)
+                : ($id > 0 ? (int)($current['read_only'] ?? 0) : 0);
         $adminComment = trim((string)($input['adminComment'] ?? $input['admin_comment'] ?? ($current['admin_comment'] ?? '')));
         if ($login === '') {
             self::apiError(422, 'validation_failed', 'login is required');
@@ -878,15 +879,15 @@ trait AppApiTrait
                         self::apiError(422, 'validation_failed', 'password must be at least 6 characters');
                         return;
                     }
-                    $pdo->prepare('UPDATE users SET login=?, phone=?, password_hash=?, role=?, blocked=?, hide_archive=?, can_rename_cameras=?, admin_comment=? WHERE id=?')
-                        ->execute([$login, $phone, password_hash($password, PASSWORD_DEFAULT), $role, $blocked, $hideArchive, $canRenameCameras, $adminComment, $id]);
+                    $pdo->prepare('UPDATE users SET login=?, phone=?, password_hash=?, role=?, blocked=?, hide_archive=?, read_only=?, admin_comment=? WHERE id=?')
+                        ->execute([$login, $phone, password_hash($password, PASSWORD_DEFAULT), $role, $blocked, $hideArchive, $readOnly, $adminComment, $id]);
                 } else {
-                    $pdo->prepare('UPDATE users SET login=?, phone=?, role=?, blocked=?, hide_archive=?, can_rename_cameras=?, admin_comment=? WHERE id=?')
-                        ->execute([$login, $phone, $role, $blocked, $hideArchive, $canRenameCameras, $adminComment, $id]);
+                    $pdo->prepare('UPDATE users SET login=?, phone=?, role=?, blocked=?, hide_archive=?, read_only=?, admin_comment=? WHERE id=?')
+                        ->execute([$login, $phone, $role, $blocked, $hideArchive, $readOnly, $adminComment, $id]);
                 }
             } else {
-                $pdo->prepare('INSERT INTO users(login, phone, password_hash, role, blocked, hide_archive, can_rename_cameras, admin_comment, daily_token, daily_token_date, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-                    ->execute([$login, $phone, password_hash($password, PASSWORD_DEFAULT), $role, $blocked, $hideArchive, $canRenameCameras, $adminComment, Util::randomToken(), TokenService::today(), Util::now()]);
+                $pdo->prepare('INSERT INTO users(login, phone, password_hash, role, blocked, hide_archive, read_only, admin_comment, daily_token, daily_token_date, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+                    ->execute([$login, $phone, password_hash($password, PASSWORD_DEFAULT), $role, $blocked, $hideArchive, $readOnly, $adminComment, Util::randomToken(), TokenService::today(), Util::now()]);
                 $id = DB::lastInsertId('users');
             }
             if ($folderIds !== null) {
@@ -1901,6 +1902,7 @@ trait AppApiTrait
             'role' => (string)$user['role'],
             'blocked' => (int)($user['blocked'] ?? 0) === 1,
             'hideArchive' => (int)($user['hide_archive'] ?? 0) === 1,
+            'readOnly' => (int)($user['read_only'] ?? 0) === 1,
             'hasStaticToken' => !empty($user['static_token_hash']),
             'createdAt' => $user['created_at'] ?? null,
             'lastLoginAt' => $user['last_login_at'] ?? null,

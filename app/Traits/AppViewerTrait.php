@@ -23,7 +23,7 @@ trait AppViewerTrait
         $favorites = Repo::favoritesMap((int)$user['id']);
 
         $isAdmin = ($user['role'] ?? '') === 'admin';
-        $canRename = $isAdmin || !empty($user['can_rename_cameras']);
+        $canRename = $isAdmin || empty($user['read_only']);
         $title = $mode === 'map' ? self::t('nav.map', 'Карта') : self::t('cameras.title', 'Камеры');
         self::layout($title, function () use ($mode, $filter, $searchQuery, $cameras, $favorites, $cameraPager, $cols, $previewRefresh, $isAdmin, $canRename) {
             self::filters($mode, [], $filter, $searchQuery, $cols, $previewRefresh);
@@ -493,7 +493,7 @@ trait AppViewerTrait
         $user = Auth::requireLogin();
         $cameraId = (int)($_GET['id'] ?? Util::post('id'));
         $isAdmin = ($user['role'] ?? '') === 'admin';
-        if (!$isAdmin && empty($user['can_rename_cameras'])) {
+        if (!$isAdmin && !empty($user['read_only'])) {
             http_response_code(403);
             echo 'Forbidden';
             return;
@@ -562,7 +562,7 @@ trait AppViewerTrait
     private static function mosaics(): void
     {
         $user = Auth::requireLogin();
-        if (($user['role'] ?? '') !== 'admin' && (int)($user['mosaic_enabled'] ?? 0) !== 1) {
+        if (($user['role'] ?? '') !== 'admin' && !empty($user['read_only'])) {
             http_response_code(403);
             echo 'Forbidden';
             return;
@@ -599,7 +599,7 @@ trait AppViewerTrait
     private static function mosaicEdit(): void
     {
         $user = Auth::requireLogin();
-        if (($user['role'] ?? '') !== 'admin' && (int)($user['mosaic_enabled'] ?? 0) !== 1) {
+        if (($user['role'] ?? '') !== 'admin' && !empty($user['read_only'])) {
             http_response_code(403);
             echo 'Forbidden';
             return;
@@ -675,7 +675,7 @@ trait AppViewerTrait
     private static function mosaicSave(): void
     {
         $user = Auth::requireLogin();
-        if (($user['role'] ?? '') !== 'admin' && (int)($user['mosaic_enabled'] ?? 0) !== 1) {
+        if (($user['role'] ?? '') !== 'admin' && !empty($user['read_only'])) {
             http_response_code(403);
             echo 'Forbidden';
             return;
@@ -722,7 +722,7 @@ trait AppViewerTrait
     private static function mosaicView(): void
     {
         $user = Auth::requireLogin();
-        if (($user['role'] ?? '') !== 'admin' && (int)($user['mosaic_enabled'] ?? 0) !== 1) {
+        if (($user['role'] ?? '') !== 'admin' && !empty($user['read_only'])) {
             http_response_code(403);
             echo 'Forbidden';
             return;
@@ -764,7 +764,7 @@ trait AppViewerTrait
     private static function mosaicDelete(): void
     {
         $user = Auth::requireLogin();
-        if (($user['role'] ?? '') !== 'admin' && (int)($user['mosaic_enabled'] ?? 0) !== 1) {
+        if (($user['role'] ?? '') !== 'admin' && !empty($user['read_only'])) {
             http_response_code(403);
             echo 'Forbidden';
             return;

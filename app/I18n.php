@@ -1952,29 +1952,41 @@ final class I18n
         }
 
         foreach ([
-            'ru' => 'Разрешить создание мозаик',
-            'en' => 'Allow creating mosaics',
-            'de' => 'Mosaikerstellung erlauben',
-            'fr' => 'Autoriser la création de mosaïques',
-            'es' => 'Permitir crear mosaicos',
-            'it' => 'Consenti creazione mosaici',
-            'pt' => 'Permitir criar mosaicos',
-            'bg' => 'Позволи създаване на мозайки',
-            'pl' => 'Zezwól na tworzenie mozaik',
-            'zh' => '允许创建宫格',
-            'ja' => 'モザイク作成を許可',
-            'ko' => '모자이크 생성 허용',
-            'ar' => 'السماح بإنشاء الفسيفساء',
-            'hy' => 'Թույլ տալ խճանկարների ստեղծումը',
+            'ru' => 'Режим только для чтения',
+            'en' => 'Read-only mode',
+            'de' => 'Nur-Lese-Modus',
+            'fr' => 'Mode lecture seule',
+            'es' => 'Modo solo lectura',
+            'it' => 'Modalità sola lettura',
+            'pt' => 'Modo somente leitura',
+            'bg' => 'Режим само за четене',
+            'pl' => 'Tryb tylko do odczytu',
+            'zh' => '只读模式',
+            'ja' => '読み取り専用モード',
+            'ko' => '읽기 전용 모드',
+            'ar' => 'وضع القراءة فقط',
+            'hy' => 'Ընթերցման ռեժիմ',
         ] as $locale => $label) {
-            $messages[$locale]['users.mosaicEnabled'] = $label;
+            $messages[$locale]['users.readOnly'] = $label;
         }
 
         foreach ([
-            'ru' => 'Разрешить переименование камер',
-            'en' => 'Allow camera renaming',
+            'ru' => 'Профиль доступен только для чтения',
+            'en' => 'Profile is read-only',
+            'de' => 'Profil ist schreibgeschützt',
+            'fr' => 'Le profil est en lecture seule',
+            'es' => 'El perfil es de solo lectura',
+            'it' => 'Il profilo è di sola lettura',
+            'pt' => 'O perfil é somente leitura',
+            'bg' => 'Профилът е само за четене',
+            'pl' => 'Profil jest tylko do odczytu',
+            'zh' => '个人资料为只读',
+            'ja' => 'プロフィールは読み取り専用です',
+            'ko' => '프로필이 읽기 전용입니다',
+            'ar' => 'الملف الشخصي للقراءة فقط',
+            'hy' => 'Պրոֆիլը միայն ընթերցման համար է',
         ] as $locale => $label) {
-            $messages[$locale]['users.canRenameCameras'] = $label;
+            $messages[$locale]['profile.readOnly'] = $label;
         }
 
         foreach ([
