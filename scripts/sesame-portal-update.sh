@@ -153,7 +153,10 @@ rm -rf "$RELEASE_DIR"
 install -d -m 0755 "$RELEASE_DIR"
 
 ARCHIVE="$TMP_DIR/source.tar.gz"
-curl -fsSL --connect-timeout 5 --max-time 120 "${curl_headers[@]}" "https://github.com/$REPO/archive/$SHA.tar.gz" -o "$ARCHIVE"
+if ! curl -fsSL --connect-timeout 5 --max-time 120 "${curl_headers[@]}" "https://github.com/$REPO/archive/$SHA.tar.gz" -o "$ARCHIVE"; then
+  # Some forks/branches only expose the tarball by ref, not by full SHA.
+  curl -fsSL --connect-timeout 5 --max-time 120 "${curl_headers[@]}" "https://codeload.github.com/$REPO/tar.gz/refs/heads/$REF" -o "$ARCHIVE"
+fi
 mkdir -p "$TMP_DIR/extract"
 tar -xzf "$ARCHIVE" -C "$TMP_DIR/extract"
 SOURCE_DIR="$(find "$TMP_DIR/extract" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
