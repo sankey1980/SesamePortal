@@ -94,6 +94,7 @@
   initDvrStreamImport();
   initLocalTimes();
   initPlayerBackBridge();
+  initPlayerSafeArea();
   initThemeToggle();
   initStaticTokens();
   initInstallPrompt();
@@ -570,6 +571,51 @@
 
       window.location.assign(relativeUrl(targetUrl));
     });
+  }
+
+  function initPlayerSafeArea() {
+    const frames = Array.from(document.querySelectorAll(".player-frame"));
+    if (!frames.length) return;
+
+    function nudgeFrame(frame) {
+      if (frame.dataset.safeAreaNudge === "1") return;
+      frame.dataset.safeAreaNudge = "1";
+      requestAnimationFrame(() => {
+        frame.style.height = "calc(100% - 1px)";
+        requestAnimationFrame(() => {
+          frame.style.height = "";
+          delete frame.dataset.safeAreaNudge;
+        });
+      });
+    }
+
+    function nudgeAll() {
+      frames.forEach(nudgeFrame);
+    }
+
+    function updateAppHeight() {
+      const vv = window.visualViewport;
+      const h = vv ? Math.round(vv.height + vv.offsetTop) : window.innerHeight;
+      if (Number.isFinite(h) && h > 0) {
+        document.documentElement.style.setProperty("--portal-app-height", h + "px");
+        nudgeAll();
+      }
+    }
+
+    frames.forEach((frame) => {
+      if (frame.dataset.safeAreaBound !== "1") {
+        frame.dataset.safeAreaBound = "1";
+        frame.addEventListener("load", nudgeFrame.bind(null, frame));
+      }
+    });
+
+    updateAppHeight();
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", updateAppHeight);
+      window.visualViewport.addEventListener("scroll", updateAppHeight);
+    }
+    window.addEventListener("resize", updateAppHeight);
+    window.addEventListener("orientationchange", () => setTimeout(updateAppHeight, 150));
   }
 
   function safeSameOriginUrl(value) {
