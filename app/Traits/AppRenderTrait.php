@@ -43,7 +43,8 @@ trait AppRenderTrait
             $viewerFilter = (string)($_GET['filter'] ?? 'all');
             self::navLink('/', self::t('nav.cameras', 'Камеры'), 'grid', Util::path() === '/' && $viewerFilter !== 'favorites');
             if (($user['role'] ?? '') === 'admin' || empty($user['read_only'])) {
-                self::navLink('/mosaic', self::t('nav.mosaic', 'Мозаика'), 'grid', Util::path() === '/mosaic');
+                // TEMP: mosaic menu hidden — раскомментировать, чтобы вернуть пункт «Мозаика».
+                // self::navLink('/mosaic', self::t('nav.mosaic', 'Мозаика'), 'grid', Util::path() === '/mosaic');
                 self::navLink('/video-walls', self::t('wall.title', 'Видеостена'), 'dashboard', str_starts_with(Util::path(), '/video-walls'));
             }
             self::navLink('/viewer/map', self::t('nav.map', 'Карта'), 'map');
