@@ -1825,7 +1825,10 @@ trait AppPagesTrait
             echo '<label>' . self::t('cameras.onvifPort', 'Порт') . '<input name="onvif_port" type="number" min="1" max="65535" value="' . Util::h((string)($form['onvif_port'] ?? 80)) . '"></label>';
             echo '<label>' . self::t('cameras.onvifUsername', 'Логин') . '<input name="onvif_username" value="' . Util::h($form['onvif_username'] ?? '') . '" placeholder="admin"></label>';
             echo '<label>' . self::t('cameras.onvifPassword', 'Пароль') . '<input name="onvif_password" type="text" value="' . Util::h($form['onvif_password'] ?? '') . '"></label>';
-            echo '</div></details></div>';
+            echo '</div>';
+            echo '<div class="onvif-probe-row"><button type="button" class="btn" data-onvif-probe>' . self::t('cameras.onvifProbe', 'Проверить подключение') . '</button><span class="onvif-probe-result" data-onvif-probe-result hidden></span></div>';
+            echo '<details class="onvif-probe-details" data-onvif-probe-details hidden><summary>' . self::t('cameras.onvifProbeDetails', 'Данные камеры') . '</summary><div class="onvif-probe-body" data-onvif-probe-body></div></details>';
+            echo '</details></div>';
             $isAdmin = (Auth::user()['role'] ?? '') === 'admin';
             if ($isAdmin && $edit) {
                 $hasToken = trim((string)($edit['permanent_token_hash'] ?? '')) !== '';
@@ -1945,6 +1948,28 @@ trait AppPagesTrait
             self::table(self::t('cameras.title', 'Камеры'), ['name', 'server_name', 'dvr_control_mode', 'agent_id', 'agent_camera_id', 'retention_days', 'archive_enabled', 'last_sync_message'], $cameras, '/admin/cameras', true, $list);
             echo '</div>';
         });
+    }
+
+    private static function onvifProbe(): void
+    {
+        Auth::requireAdmin();
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+            http_response_code(405);
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode(['ok' => false, 'message' => 'POST required']);
+            return;
+        }
+
+        $host = trim((string)Util::post('host'));
+        $port = max(1, min(65535, (int)Util::post('port', 80)));
+        $username = (string)Util::post('username');
+        $password = (string)Util::post('password');
+
+        $result = OnvifProbe::probe($host, $port, $username, $password);
+        http_response_code(200);
+        header('Content-Type: application/json; charset=utf-8');
+        header('Cache-Control: no-store');
+        echo json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
     }
 
     private static function cameraImport(): void

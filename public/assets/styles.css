@@ -1748,7 +1748,7 @@ tr:last-child td {
   gap: 10px;
   width: fit-content;
   max-width: 100%;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 16px;
   padding: 12px;
@@ -1772,6 +1772,92 @@ tr:last-child td {
 .camera-edit-preview.no-preview {
   width: min(480px, 100%);
   aspect-ratio: 16 / 9;
+}
+.onvif-probe-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+.onvif-probe-result {
+  font-size: 13px;
+  font-weight: 700;
+}
+.onvif-probe-result.success {
+  color: var(--success);
+}
+.onvif-probe-result.danger {
+  color: var(--danger);
+}
+.onvif-probe-details {
+  margin-top: 10px;
+  font-size: 13px;
+}
+.onvif-probe-details > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-weight: 700;
+  user-select: none;
+}
+.onvif-probe-body {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+.onvif-probe-subtitle {
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.onvif-probe-list {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) minmax(0, 1fr);
+  gap: 4px 14px;
+  margin: 0;
+}
+.onvif-probe-list dt {
+  color: var(--muted);
+}
+.onvif-probe-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.onvif-probe-services {
+  overflow-wrap: anywhere;
+}
+.onvif-probe-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.onvif-probe-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.onvif-probe-table th,
+.onvif-probe-table td {
+  padding: 7px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+.onvif-probe-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.onvif-probe-table th {
+  color: var(--muted);
+  font-weight: 800;
+}
+.onvif-probe-warnings {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--warn);
+  font-weight: 700;
 }
 .camera-edit-preview img {
   width: auto;

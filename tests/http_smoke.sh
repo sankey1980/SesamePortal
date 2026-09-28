@@ -535,6 +535,97 @@ printf "%s" "$admin_cameras_form" | grep -F -q 'name="folder_ids[]"'
 printf "%s" "$admin_cameras_form" | grep -q "data-group-tree-toggle"
 printf "%s" "$admin_cameras_form" | grep -q "Smoke Subgroup"
 printf "%s" "$admin_cameras_form" | php -r '$html = stream_get_contents(STDIN); $selected = strpos($html, ">Smoke Folder<"); exit($selected !== false ? 0 : 1);'
+# ONVIF section in camera edit form has a "Test connection" button (data-onvif-probe), a result
+# container and a collapsible details block rendered with the probe response.
+printf "%s" "$admin_cameras_form" | grep -F -q 'data-onvif-probe'
+printf "%s" "$admin_cameras_form" | grep -F -q 'data-onvif-probe-result'
+printf "%s" "$admin_cameras_form" | grep -F -q 'data-onvif-probe-details'
+printf "%s" "$admin_cameras_form" | grep -F -q 'data-onvif-probe-body'
+printf "%s" "$admin_cameras_form" | grep -q "Проверить подключение"
+printf "%s" "$admin_cameras_form" | grep -q "Данные камеры"
+# ONVIF probe AJAX endpoint: positive case — full chain date/device/caps/profiles on the mock.
+onvif_probe_ok="$(curl -sS -b "$COOKIE_JAR" \
+  -d "host=127.0.0.1" -d "port=$DVR_PORT" -d "username=admin" -d "password=$ONVIF_PW" -d "csrf=$dashboard_csrf" \
+  "http://127.0.0.1:$PORT/admin/cameras/onvif-probe")"
+printf "%s" "$onvif_probe_ok" | grep -F -q '"ok":true'
+printf "%s" "$onvif_probe_ok" | grep -F -q '"step":"profiles"'
+printf "%s" "$onvif_probe_ok" | grep -F -q 'SesameMock'
+printf "%s" "$onvif_probe_ok" | grep -F -q 'MOCK-100'
+printf "%s" "$onvif_probe_ok" | grep -F -q '5.7.3'
+# Video profiles: 3 entries, main stream 1920x1080 H264@25. No RTSP link is requested.
+printf "%s" "$onvif_probe_ok" | grep -F -q 'MainStream'
+printf "%s" "$onvif_probe_ok" | grep -F -q 'SubStream'
+printf "%s" "$onvif_probe_ok" | grep -F -q 'AudioOnly'
+printf "%s" "$onvif_probe_ok" | grep -F -q 'H264'
+printf "%s" "$onvif_probe_ok" | grep -F -q '"width":1920'
+printf "%s" "$onvif_probe_ok" | grep -F -q '"height":1080'
+test "$(printf "%s" "$onvif_probe_ok" | grep -o '"token":"[A-Za-z]*Profile"' | wc -l)" -eq 3
+# Resolution must come from VideoEncoderConfiguration, not the 640x480 decoy inside Imaging.
+! printf "%s" "$onvif_probe_ok" | grep -F -q '"width":640'
+# Media service is requested on the same host:port as the device service.
+printf "%s" "$onvif_probe_ok" | grep -F -q "\"media_url\":\"http://127.0.0.1:$DVR_PORT/onvif/media_service\""
+# The probe must never return the raw camera body.
+! printf "%s" "$onvif_probe_ok" | grep -F -q '"response"'
+# ONVIF probe: availability-only case (no username) — still ok, step=date, with a warning.
+onvif_probe_noauth="$(curl -sS -b "$COOKIE_JAR" \
+  -d "host=127.0.0.1" -d "port=$DVR_PORT" -d "username=" -d "password=" -d "csrf=$dashboard_csrf" \
+  "http://127.0.0.1:$PORT/admin/cameras/onvif-probe")"
+printf "%s" "$onvif_probe_noauth" | grep -F -q '"ok":true'
+printf "%s" "$onvif_probe_noauth" | grep -F -q '"step":"date"'
+printf "%s" "$onvif_probe_noauth" | grep -F -q 'Укажите логин и пароль, чтобы получить модель, прошивку и видеопрофили камеры'
+# ONVIF probe: WS-Security PasswordDigest must be SHA-1 over the raw nonce bytes.
+# The mock's `strictdigest` login accepts nothing else, so this pins the algorithm.
+onvif_probe_digest="$(curl -sS -b "$COOKIE_JAR" \
+  -d "host=127.0.0.1" -d "port=$DVR_PORT" -d "username=strictdigest" -d "password=strictpw" -d "csrf=$dashboard_csrf" \
+  "http://127.0.0.1:$PORT/admin/cameras/onvif-probe")"
+printf "%s" "$onvif_probe_digest" | grep -F -q '"ok":true'
+printf "%s" "$onvif_probe_digest" | grep -F -q '"step":"profiles"'
+# ONVIF probe: bad credentials are detected as an auth fault, not a connection error.
+onvif_probe_authfail="$(curl -sS -b "$COOKIE_JAR" \
+  -d "host=127.0.0.1" -d "port=$DVR_PORT" -d "username=baduser" -d "password=wrong" -d "csrf=$dashboard_csrf" \
+  "http://127.0.0.1:$PORT/admin/cameras/onvif-probe")"
+printf "%s" "$onvif_probe_authfail" | grep -F -q '"ok":false'
+printf "%s" "$onvif_probe_authfail" | grep -F -q '"step":"auth-fail"'
+# ONVIF probe: a camera exposing no profile token must fall back to the profile name.
+onvif_probe_notoken="$(curl -sS -b "$COOKIE_JAR" \
+  -d "host=127.0.0.1" -d "port=$DVR_PORT" -d "username=notoken" -d "password=$ONVIF_PW" -d "csrf=$dashboard_csrf" \
+  "http://127.0.0.1:$PORT/admin/cameras/onvif-probe")"
+printf "%s" "$onvif_probe_notoken" | grep -F -q '"ok":true'
+printf "%s" "$onvif_probe_notoken" | grep -F -q '"step":"profiles"'
+printf "%s" "$onvif_probe_notoken" | grep -F -q 'proname_ch0001'
+# The probe must never return the raw camera body.
+! printf "%s" "$onvif_probe_notoken" | grep -F -q '"response"'
+# ONVIF probe: missing media service degrades to partial success with a warning.
+onvif_probe_nomedia="$(curl -sS -b "$COOKIE_JAR" \
+  -d "host=127.0.0.1" -d "port=$DVR_PORT" -d "username=nomedia" -d "password=$ONVIF_PW" -d "csrf=$dashboard_csrf" \
+  "http://127.0.0.1:$PORT/admin/cameras/onvif-probe")"
+printf "%s" "$onvif_probe_nomedia" | grep -F -q '"ok":true'
+printf "%s" "$onvif_probe_nomedia" | grep -F -q '"step":"caps"'
+printf "%s" "$onvif_probe_nomedia" | grep -F -q 'Не удалось получить видеопрофили'
+# ONVIF probe: negative case — unreachable host/port 1.
+onvif_probe_fail="$(curl -sS -b "$COOKIE_JAR" \
+  -d "host=127.0.0.1" -d "port=1" -d "username=admin" -d "password=$ONVIF_PW" -d "csrf=$dashboard_csrf" \
+  "http://127.0.0.1:$PORT/admin/cameras/onvif-probe")"
+printf "%s" "$onvif_probe_fail" | grep -F -q '"ok":false'
+printf "%s" "$onvif_probe_fail" | grep -F -q '"step":"date"'
+# The probe must never return the raw camera body, not even on a connection failure.
+! printf "%s" "$onvif_probe_fail" | grep -F -q '"response"'
+# ONVIF probe: validation — empty host and out-of-range port.
+onvif_probe_nohost="$(curl -sS -b "$COOKIE_JAR" \
+  -d "host=" -d "port=80" -d "username=" -d "password=" -d "csrf=$dashboard_csrf" \
+  "http://127.0.0.1:$PORT/admin/cameras/onvif-probe")"
+printf "%s" "$onvif_probe_nohost" | grep -F -q '"ok":false'
+printf "%s" "$onvif_probe_nohost" | grep -F -q '"step":"validation"'
+# Out-of-range port is clamped to 1..65535 by the route, so it must fail as unreachable, not validate.
+onvif_probe_badport="$(curl -sS -b "$COOKIE_JAR" \
+  -d "host=127.0.0.1" -d "port=0" -d "username=admin" -d "password=$ONVIF_PW" -d "csrf=$dashboard_csrf" \
+  "http://127.0.0.1:$PORT/admin/cameras/onvif-probe")"
+printf "%s" "$onvif_probe_badport" | grep -F -q '"ok":false'
+onvif_probe_badhost="$(curl -sS -b "$COOKIE_JAR" \
+  -d "host=not a host" -d "port=80" -d "username=admin" -d "password=$ONVIF_PW" -d "csrf=$dashboard_csrf" \
+  "http://127.0.0.1:$PORT/admin/cameras/onvif-probe")"
+printf "%s" "$onvif_probe_badhost" | grep -F -q '"ok":false'
+printf "%s" "$onvif_probe_badhost" | grep -F -q '"step":"validation"'
 admin_cameras_back_form="$(curl -fsS -b "$COOKIE_JAR" "http://127.0.0.1:$PORT/admin/cameras?edit=1&back=%2Fviewer%2Fplayer%3Fid%3D1%26back%3D%252F%253Fcols%253D6")"
 printf "%s" "$admin_cameras_back_form" | grep -F -q 'href="/viewer/player?id=1&amp;back=%2F%3Fcols%3D6">Назад</a>'
 admin_cameras_new_form="$(curl -fsS -b "$COOKIE_JAR" "http://127.0.0.1:$PORT/admin/cameras")"

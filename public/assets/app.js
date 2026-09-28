@@ -86,6 +86,7 @@
   initDensitySwitch();
   initGroupTreePickers();
   initCameraFormVisibility();
+  initOnvifProbe();
   initDvrStreamOptions();
   initSubmitProgress();
   initConfirmDialogs();
@@ -1046,6 +1047,144 @@
       modeSelect?.addEventListener("change", sync);
       watermarkToggle?.addEventListener("change", sync);
       sync();
+    });
+  }
+
+  function onvifEl(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null && text !== "") node.textContent = String(text);
+    return node;
+  }
+
+  function onvifDeviceRows(device) {
+    const rows = [
+      ["onvifProbeManufacturer", device.manufacturer],
+      ["onvifProbeModel", device.model],
+      ["onvifProbeFirmware", device.firmware],
+      ["onvifProbeSerial", device.serial],
+      ["onvifProbeHardware", device.hardware],
+    ];
+    const list = onvifEl("dl", "onvif-probe-list");
+    rows.forEach(([key, value]) => {
+      if (!value) return;
+      list.appendChild(onvifEl("dt", "", messages[key] || key));
+      list.appendChild(onvifEl("dd", "", value));
+    });
+    return list.childElementCount > 0 ? list : null;
+  }
+
+  function onvifProfilesTable(profiles) {
+    const wrap = onvifEl("div", "onvif-probe-table-wrap");
+    const table = onvifEl("table", "onvif-probe-table");
+    const head = onvifEl("thead");
+    const headRow = onvifEl("tr");
+    [
+      ["onvifProbeProfileName", ""],
+      ["onvifProbeEncoding", ""],
+      ["onvifProbeResolution", ""],
+      ["onvifProbeFps", ""],
+      ["onvifProbeBitrateKbps", ""],
+    ].forEach(([key]) => {
+      headRow.appendChild(onvifEl("th", "", messages[key] || key));
+    });
+    head.appendChild(headRow);
+    table.appendChild(head);
+    const body = onvifEl("tbody");
+    profiles.forEach((profile) => {
+      const row = onvifEl("tr");
+      row.appendChild(onvifEl("td", "", profile.name || "—"));
+      row.appendChild(onvifEl("td", "", profile.encoding || "—"));
+      const resolution = profile.width && profile.height ? profile.width + "×" + profile.height : "—";
+      row.appendChild(onvifEl("td", "", resolution));
+      row.appendChild(onvifEl("td", "", profile.fps || "—"));
+      row.appendChild(onvifEl("td", "", profile.bitrate || "—"));
+      body.appendChild(row);
+    });
+    table.appendChild(body);
+    wrap.appendChild(table);
+    return wrap;
+  }
+
+  function renderOnvifProbeDetails(container, details) {
+    container.textContent = "";
+    const data = details || {};
+    if (data.device && typeof data.device === "object") {
+      const rows = onvifDeviceRows(data.device);
+      if (rows) {
+        container.appendChild(onvifEl("h4", "onvif-probe-subtitle", messages.onvifProbeDevice || "Device"));
+        container.appendChild(rows);
+      }
+    }
+    if (Array.isArray(data.services) && data.services.length > 0) {
+      container.appendChild(onvifEl("h4", "onvif-probe-subtitle", messages.onvifProbeServices || "Services"));
+      container.appendChild(onvifEl("div", "onvif-probe-services", data.services.join(", ")));
+    }
+    if (Array.isArray(data.profiles) && data.profiles.length > 0) {
+      container.appendChild(onvifEl("h4", "onvif-probe-subtitle", messages.onvifProbeProfiles || "Video profiles"));
+      container.appendChild(onvifProfilesTable(data.profiles));
+    }
+    if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+      const list = onvifEl("ul", "onvif-probe-warnings");
+      data.warnings.forEach((warning) => list.appendChild(onvifEl("li", "", warning)));
+      container.appendChild(list);
+    }
+  }
+
+  function initOnvifProbe(root = document) {
+    root.querySelectorAll("[data-onvif-probe]").forEach((btn) => {
+      if (btn.dataset.onvifProbeBound === "1") return;
+      btn.dataset.onvifProbeBound = "1";
+      const form = btn.closest("form");
+      const result = form?.querySelector("[data-onvif-probe-result]") || null;
+      const detailsBox = form?.querySelector("[data-onvif-probe-details]") || null;
+      const detailsBody = form?.querySelector("[data-onvif-probe-body]") || null;
+      btn.addEventListener("click", async () => {
+        if (!form) return;
+        const host = (form.querySelector('[name="onvif_host"]')?.value || "").trim();
+        const port = (form.querySelector('[name="onvif_port"]')?.value || "80").trim();
+        const username = (form.querySelector('[name="onvif_username"]')?.value || "").trim();
+        const password = form.querySelector('[name="onvif_password"]')?.value || "";
+        const original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = messages.onvifProbeChecking || "Checking…";
+        if (result) {
+          result.hidden = false;
+          result.textContent = "";
+          result.className = "onvif-probe-result";
+        }
+        if (detailsBox) detailsBox.hidden = true;
+        try {
+          const resp = await fetch("/admin/cameras/onvif-probe", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+              host,
+              port,
+              username,
+              password,
+              csrf: window.SESAME_CSRF || "",
+            }),
+          });
+          const data = await resp.json().catch(() => ({ ok: false, message: "HTTP " + resp.status }));
+          if (result) {
+            result.textContent = data.message || (data.ok ? "OK" : "Error");
+            result.classList.add(data.ok ? "success" : "danger");
+          }
+          if (detailsBox && detailsBody) {
+            renderOnvifProbeDetails(detailsBody, data.details);
+            detailsBox.hidden = detailsBody.childElementCount === 0;
+          }
+        } catch (e) {
+          if (result) {
+            result.textContent = String(e || "Error");
+            result.classList.add("danger");
+          }
+        } finally {
+          btn.disabled = false;
+          btn.textContent = original;
+        }
+      });
     });
   }
 

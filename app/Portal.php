@@ -14,6 +14,7 @@ require_once __DIR__ . '/TokenService.php';
 require_once __DIR__ . '/Auth.php';
 require_once __DIR__ . '/Csrf.php';
 require_once __DIR__ . '/DvrClient.php';
+require_once __DIR__ . '/OnvifProbe.php';
 require_once __DIR__ . '/PortalUpdateService.php';
 require_once __DIR__ . '/Repo.php';
 require_once __DIR__ . '/VideoWalls.php';

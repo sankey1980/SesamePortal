@@ -46,6 +46,7 @@ final class App
             '/admin/agents/snapshot' => self::agentSnapshotProxy(),
             '/admin/agents' => self::agents(),
             '/admin/cameras' => self::cameras(),
+            '/admin/cameras/onvif-probe' => self::onvifProbe(),
             '/admin/cameras/import' => self::cameraImport(),
             '/admin/audit' => self::audit(),
             '/admin/settings' => self::settings(),

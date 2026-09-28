@@ -514,6 +514,99 @@ Portal повторно проверяет отсутствие каждой п�
 и timeline repair копируются в локальную запись. Операция фиксируется в audit
 как `camera.import`.
 
+### POST /admin/cameras/onvif-probe
+
+Проверяет ONVIF-устройство по данным, введённым в форме камеры, и возвращает
+JSON с данными устройства и видеопрофилями. Камера не сохраняется и в БД не
+записывается: проверяются ровно те host/port/username/password, которые
+прислал браузер. Используется кнопкой «Проверить подключение».
+
+Требует admin, CSRF и `POST`; ответ `Content-Type: application/json`.
+
+Поля:
+
+| Поле | Описание |
+| --- | --- |
+| `host` | IP-адрес или хост ONVIF-устройства. |
+| `port` | Порт ONVIF-устройства. Приводится к диапазону `1..65535`; по умолчанию `80`. |
+| `username` | Логин ONVIF. Пустое значение ограничивает проверку доступностью сервиса. |
+| `password` | Пароль ONVIF. |
+| `csrf` | CSRF-токен. |
+
+Последовательность запросов: `GetSystemDateAndTime` → `GetDeviceInformation` →
+`GetCapabilities` → `GetProfiles`. Первые три идут на
+`http://<host>:<port>/onvif/device_service`, `GetProfiles` - на media-сервис,
+который запрашивается строго на том же host:port
+(`http://<host>:<port>/onvif/media_service`); `XAddr` из ответа камеры не
+используется. Аутентификация - WS-Security UsernameToken/PasswordDigest.
+Показывается не более 12 профилей, таймаут запроса 5 c, таймаут установки
+соединения 4 c. Запрос `GetStreamUri` не выполняется, RTSP-ссылки в ответе
+не возвращаются.
+Расширения `SoapClient` и `DOMDocument` не требуются.
+
+Формат ответа:
+
+```json
+{
+  "ok": true,
+  "message": "ONVIF: подключение успешно",
+  "details": {
+    "url": "http://192.0.2.10:80/onvif/device_service",
+    "step": "profiles",
+    "device": {
+      "manufacturer": "SesameMock",
+      "model": "MOCK-100",
+      "firmware": "5.7.3",
+      "serial": "SN-MOCK-0001",
+      "hardware": "HW-MOCK-0001"
+    },
+    "services": ["Device", "Media", "PTZ", "Events"],
+    "media_url": "http://192.0.2.10:80/onvif/media_service",
+    "profiles": [
+      {
+        "name": "MainStream",
+        "token": "MainProfile",
+        "encoding": "H264",
+        "width": 1920,
+        "height": 1080,
+        "fps": 25,
+        "bitrate": 4096
+      }
+    ]
+  }
+}
+```
+
+Значения `details.step`:
+
+| `step` | Значение |
+| --- | --- |
+| `validation` | Некорректный host. Ответ `ok:false`, ничего не опрашивалось. |
+| `date` | `GetSystemDateAndTime` не прошёл: недоступен порт, ответил не ONVIF или вернулся SOAP Fault. |
+| `info` | `GetDeviceInformation` не прошёл. |
+| `caps` | `GetCapabilities` не прошёл. |
+| `profiles` | `GetProfiles` не прошёл или вернул пустой список. |
+| `auth-fail` | Камера вернула `NotAuthorized` / `UserAuthentication` Fault. |
+
+Частичный успех возвращается с `ok:true` и списком `details.warnings`:
+не задан `username` (проверена только доступность), `GetProfiles` не прошёл,
+камера не вернула профилей, профилей больше 12 (показаны первые 12). Ошибка
+получения профилей не превращает проверку в неуспешную. Отсутствие CSRF или
+прав admin даёт `401`/`403` без тела ответа.
+
+Особенности разбора ответов камер:
+
+- `ProfileToken` берётся из элемента `<tt:Token>`, затем из атрибута `token`
+  элемента `Profiles`, затем из `<tt:Token>` внутри `VideoSourceConfiguration`,
+  а в крайнем случае используется имя профиля - часть камер не отдаёт токен
+  вовсе, но принимает имя в качестве `ProfileToken`. Сырое тело ответа камеры
+  в ответе не возвращается, поэтому диагностика ограничена текстом ошибки и
+  значением `step`.
+- При неуспешном HTTP-ответе в тексте ошибки указывается код ответа.
+- `Width`/`Height`/`FrameRateLimit`/`BitrateLimit` читаются только из
+  `VideoEncoderConfiguration` профиля, поэтому значения из секций `Imaging`
+  и `AudioByResolution` не подставляются.
+
 ### POST /admin/cameras
 
 Создаёт, обновляет, синхронизирует или удаляет камеру.
