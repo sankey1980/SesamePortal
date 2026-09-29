@@ -29,9 +29,8 @@ final class Cli
 
     public static function run(array $argv): void
     {
-        DB::migrate();
         $command = $argv[1] ?? 'help';
-
+        DB::migrate($command === 'migrate');
         if ($command === 'migrate') {
             echo "migrated\n";
             return;
