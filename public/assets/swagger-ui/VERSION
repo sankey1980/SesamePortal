@@ -1,0 +1,5 @@
+swagger-ui-dist 5.17.14
+https://unpkg.com/swagger-ui-dist@5.17.14/
+
+Files: swagger-ui.css, swagger-ui-bundle.js, swagger-ui-standalone-preset.js
+Upstream license: Apache-2.0, see LICENSE in this directory.

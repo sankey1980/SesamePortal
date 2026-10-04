@@ -61,6 +61,8 @@ trait AppRenderTrait
                 self::navLink('/admin/agents', self::t('nav.agents', 'Edge Agents'), 'agent');
                 self::navLink('/admin/audit', self::t('nav.audit', 'Журнал'), 'audit');
                 self::navLink('/admin/settings', self::t('nav.settings', 'Настройки'), 'settings');
+                // Proper noun, no translation key needed.
+                self::navLink('/docs.html', 'OpenAPI', 'api');
                 echo '</nav>';
             }
             echo '<div class="sidebar-foot">' . I18n::languageLinks() . '<a class="logout-link" href="/logout">' . self::icon('logout') . self::t('nav.logout', 'Выход') . '</a></div></aside>';
@@ -144,6 +146,7 @@ trait AppRenderTrait
             'play' => '<path d="M8 5v14l11-7z"/>',
             'pause' => '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>',
             'search' => '<circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="m20 20-3.5-3.5"/>',
+            'api' => '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M8 4c-2 0-2 2.5-2 4s0 4-2 4c2 0 2 2.5 2 4s0 4 2 4M16 4c2 0 2 2.5 2 4s0 4 2 4c-2 0-2 2.5-2 4s0 4-2 4"/>',
         ];
         return '<svg viewBox="0 0 24 24" aria-hidden="true">' . ($paths[$name] ?? $paths['grid']) . '</svg>';
     }

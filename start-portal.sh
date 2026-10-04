@@ -11,6 +11,9 @@
 #
 # Логи:   /tmp/sesame-portal-server.log
 # PID:    /tmp/sesame-portal.pid
+#
+# Роутер tests/router.php обязателен: встроенный PHP-сервер без него отдаёт 404 на
+# пути с расширением (например /openapi.json) вместо index.php.
 
 set -euo pipefail
 
@@ -19,6 +22,7 @@ HOST=0.0.0.0
 WORKERS=16
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PUBLIC="$ROOT/public"
+ROUTER="$ROOT/tests/router.php"
 PID_FILE="/tmp/sesame-portal.pid"
 LOG_FILE="/tmp/sesame-portal-server.log"
 
@@ -104,16 +108,17 @@ cmd_start() {
     fi
 
     command -v php >/dev/null || { echo "portal: php не найден в PATH" >&2; exit 1; }
+    [[ -f "$ROUTER" ]] || { echo "portal: не найден роутер $ROUTER" >&2; exit 1; }
 
     if [[ "${1:-}" == "-f" ]]; then
         # Передний план — блокирует терминал, логи в stdout/stderr
         echo "portal: запускаю на переднем плане (0.0.0.0:$PORT, $WORKERS воркеров) ..."
-        exec env PHP_CLI_SERVER_WORKERS="$WORKERS" php -S "$HOST:$PORT" -t "$PUBLIC"
+        exec env PHP_CLI_SERVER_WORKERS="$WORKERS" php -S "$HOST:$PORT" -t "$PUBLIC" "$ROUTER"
     fi
 
     # Фоновый запуск через setsid — переживает закрытие терминала
     echo "portal: запускаю dev-сервер (0.0.0.0:$PORT, $WORKERS воркеров, лог → $LOG_FILE) ..."
-    setsid env PHP_CLI_SERVER_WORKERS="$WORKERS" php -S "$HOST:$PORT" -t "$PUBLIC" </dev/null >>"$LOG_FILE" 2>&1 &
+    setsid env PHP_CLI_SERVER_WORKERS="$WORKERS" php -S "$HOST:$PORT" -t "$PUBLIC" "$ROUTER" </dev/null >>"$LOG_FILE" 2>&1 &
     local pid=$!
     echo "$pid" > "$PID_FILE"
 

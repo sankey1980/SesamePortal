@@ -12,6 +12,9 @@ final class App
     use AppAuthBackendTrait;
     use AppRenderTrait;
     use AppDataTrait;
+    use AppOpenApiSpecTrait;
+    use AppOpenApiSchemasTrait;
+    use AppOpenApiPathsTrait;
     use VideoWallPages;
 
     private static function t(string $key, string $fallback): string
@@ -29,6 +32,16 @@ final class App
         $path = Util::path();
         if ($path === '/api/portal/v1' || str_starts_with($path, '/api/portal/v1/')) {
             self::apiPortalV1();
+            return;
+        }
+
+        // Public documentation: reachable without a session, next to the JSON API.
+        if ($path === '/openapi.json') {
+            self::openApiJsonResponse();
+            return;
+        }
+        if ($path === '/docs.html' || $path === '/api/docs') {
+            self::openApiDocsPage();
             return;
         }
 

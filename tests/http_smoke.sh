@@ -2216,4 +2216,94 @@ if [[ -z "${SESAME_PORTAL_DB_DSN:-}" ]]; then
     test "$ro_legacy_cols" = "dropped"
 fi
 
+# --- OpenAPI document and Swagger UI -------------------------------------------
+# Structural contract of the document itself: resolvable refs, unique operationIds,
+# path parameters, and a route list that matches what AppApiTrait dispatches.
+php "$ROOT/tests/openapi_spec_test.php"
+
+# The document and the UI page are public: no session, no token.
+oa_headers="$(curl -sS -D - -o "$STATE_DIR/openapi.json" "http://127.0.0.1:$PORT/openapi.json")"
+grep -qi "^HTTP/1.1 200" <<<"$oa_headers"
+grep -qi "^content-type: application/json" <<<"$oa_headers"
+grep -qi "^x-content-type-options: nosniff" <<<"$oa_headers"
+test -s "$STATE_DIR/openapi.json"
+
+oa_docs_status="$(curl -sS -o "$STATE_DIR/docs.html" -w "%{http_code}" "http://127.0.0.1:$PORT/docs.html")"
+test "$oa_docs_status" = "200"
+grep -q "swagger-ui.css" "$STATE_DIR/docs.html"
+grep -q "swagger-ui-bundle.js" "$STATE_DIR/docs.html"
+! grep -Eqi "https?://(cdn|unpkg|cdnjs)" "$STATE_DIR/docs.html"
+
+# The admin sidebar links to the documentation with a neutral, untranslated label.
+oa_admin_page="$(curl -fsS -b "$COOKIE_JAR" "http://127.0.0.1:$PORT/admin/dashboard")"
+grep -F -q 'href="/docs.html"' <<<"$oa_admin_page"
+grep -F -q ">OpenAPI</span>" <<<"$oa_admin_page"
+
+# /api/docs is an alias, also public.
+oa_alias_status="$(curl -sS -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/api/docs")"
+test "$oa_alias_status" = "200"
+
+# Vendored assets are really served, not just referenced.
+for oa_asset in swagger-ui.css swagger-ui-bundle.js swagger-ui-standalone-preset.js; do
+  oa_asset_status="$(curl -sS -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/assets/swagger-ui/$oa_asset")"
+  test "$oa_asset_status" = "200"
+done
+
+# Every resource advertised by the index is described in the document, and the
+# document describes nothing outside the two prefixes the router owns.
+curl -fsS "http://127.0.0.1:$PORT/api/portal/v1" > "$STATE_DIR/api_index.json"
+OA_SPEC="$STATE_DIR/openapi.json" OA_INDEX="$STATE_DIR/api_index.json" php -r '
+$spec = json_decode((string)file_get_contents(getenv("OA_SPEC")), true);
+$index = json_decode((string)file_get_contents(getenv("OA_INDEX")), true);
+$problems = [];
+if (($spec["openapi"] ?? "") !== "3.0.3") {
+    $problems[] = "openapi version is " . var_export($spec["openapi"] ?? null, true);
+}
+if (empty($spec["info"]["title"]) || empty($spec["info"]["version"])) {
+    $problems[] = "info.title or info.version missing";
+}
+$paths = array_keys($spec["paths"] ?? []);
+if (count($paths) < 40) {
+    $problems[] = "only " . count($paths) . " paths documented";
+}
+foreach ($paths as $path) {
+    if (!str_starts_with($path, "/api/portal/v1") && $path !== "/api/sesamedvr/auth") {
+        $problems[] = "path outside the router prefixes: $path";
+    }
+}
+foreach (($index["resources"] ?? []) as $resource) {
+    $prefix = "/api/portal/v1/" . $resource;
+    $found = false;
+    foreach ($paths as $path) {
+        if ($path === $prefix || str_starts_with($path, $prefix . "/")) {
+            $found = true;
+            break;
+        }
+    }
+    if (!$found) {
+        $problems[] = "index advertises $resource but the document does not describe it";
+    }
+}
+foreach (["me", "dashboard", "users", "groups", "folders", "servers", "cameras", "favorites", "video-walls", "agents", "audit", "auth", "billing"] as $resource) {
+    if (!in_array($resource, $index["resources"] ?? [], true)) {
+        $problems[] = "resource $resource is dispatched but missing from the index";
+    }
+}
+if ($problems !== []) {
+    fwrite(STDERR, "openapi contract: " . implode("; ", $problems) . "\n");
+    exit(1);
+}
+echo "openapi contract ok (" . count($paths) . " paths, " . count($index["resources"]) . " resources)\n";
+'
+
+# Documented collection routes exist: an authenticated GET may be refused for
+# permissions or empty state, but it must never answer "Unknown ... endpoint".
+for oa_route in me users groups folders servers cameras favorites video-walls audit dashboard; do
+  oa_body="$(curl -sS -b "$COOKIE_JAR" "http://127.0.0.1:$PORT/api/portal/v1/$oa_route")"
+  ! grep -q "Unknown $oa_route endpoint" <<<"$oa_body"
+done
+oa_agents_body="$(curl -sS -b "$COOKIE_JAR" "http://127.0.0.1:$PORT/api/portal/v1/agents?serverId=1")"
+! grep -q "Unknown agents endpoint" <<<"$oa_agents_body"
+
+
 echo "http smoke ok"
