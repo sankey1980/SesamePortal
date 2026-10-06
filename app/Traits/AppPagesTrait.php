@@ -188,6 +188,12 @@ trait AppPagesTrait
                     $message = self::t('settings.externalAppSaved', 'Настройки интеграции сохранены');
                     $messageClass = 'success';
                 }
+            } elseif ($action === 'save_branding_name') {
+                [$message, $messageClass] = self::brandingSaveName();
+            } elseif ($action === 'save_branding') {
+                [$message, $messageClass] = self::brandingSaveFile();
+            } elseif ($action === 'reset_branding') {
+                [$message, $messageClass] = self::brandingReset();
             }
         }
 
@@ -199,8 +205,22 @@ trait AppPagesTrait
             $messageClass = empty($status['checkError']) ? 'success' : 'danger';
         }
 
-        self::layout(self::t('settings.title', 'Настройки'), function () use ($message, $messageClass, $status, $updateResult) {
+        // Вкладка запоминается в query формы: ответ на POST приходит без
+        // редиректа, поэтому ссылка формы — единственный способ остаться на ней.
+        $tab = (string)($_GET['tab'] ?? '');
+        $activeTab = $tab === 'customization' ? 'customization' : 'general';
+
+        self::layout(self::t('settings.title', 'Настройки'), function () use ($message, $messageClass, $status, $updateResult, $activeTab) {
             self::notice($message, $messageClass);
+            echo '<div class="settings-tabs" data-tabset>';
+            self::tabNav([
+                ['general', self::t('settings.tabGeneral', 'Основные')],
+                ['customization', self::t('settings.tabCustomization', 'Кастомизация')],
+            ], $activeTab);
+
+            // Обе вкладки отдаются в HTML, неактивная скрыта атрибутом hidden —
+            // страница остаётся читаемой без JS, а проверки в tests/ видят всё.
+            echo '<div class="tab-panel" data-tab-panel="general"' . ($activeTab !== 'general' ? ' hidden' : '') . '>';
             self::portalUpdatePanel($status, $updateResult);
             echo '<div class="map-settings-grid">';
             self::mapProviderPanel();
@@ -209,6 +229,12 @@ trait AppPagesTrait
             self::smtpSettingsPanel();
             self::callbackSettingsPanel();
             self::externalIntegrationPanel();
+            echo '</div>';
+
+            echo '<div class="tab-panel" data-tab-panel="customization"' . ($activeTab !== 'customization' ? ' hidden' : '') . '>';
+            self::brandingPanel();
+            echo '</div>';
+            echo '</div>';
         });
     }
 
@@ -363,6 +389,65 @@ trait AppPagesTrait
         echo '</section>';
     }
 
+    /**
+     * Вкладка «Кастомизация»: название приложения + свои PNG/SVG вместо
+     * стоковых favicon и иконок PWA. Файлы лежат в stateDir()/branding
+     * (вне public), апдейтер их не трогает.
+     */
+    private static function brandingPanel(): void
+    {
+        $name = (string)DB::setting('branding_app_name', '');
+
+        echo '<section class="panel"><div class="section-head"><h2>' . Util::h(self::t('settings.brandingTitle', 'Название и иконки')) . '</h2><p class="muted">' . Util::h(self::t('settings.brandingDesc', 'Свои иконки показываются в браузере вместо стандартных: favicon, иконки PWA и логотип на входе и в сайдбаре. Загруженные файлы не удаляются при обновлении Portal.')) . '</p></div>';
+
+        echo '<form method="post" action="/admin/settings?tab=customization">';
+        echo '<input type="hidden" name="action" value="save_branding_name">';
+        echo '<input type="hidden" name="csrf" value="' . Util::h(Csrf::token()) . '">';
+        echo '<div class="form-row">';
+        echo '<label>' . Util::h(self::t('settings.brandingName', 'Название приложения')) . '<input type="text" name="branding_app_name" value="' . Util::h($name) . '" placeholder="' . Util::h(self::t('settings.brandingNameDefault', 'Портал Артел МиК')) . '" maxlength="60"></label>';
+        echo '<p class="field-hint">' . Util::h(self::t('settings.brandingNameHint', 'Показывается в заголовке вкладки, alt-тексте логотипа и в манифесте PWA. Пустое значение возвращает название по умолчанию.')) . '</p>';
+        echo '</div>';
+        echo '<div class="form-actions">';
+        echo '<button type="submit" class="primary">' . Util::h(self::t('action.save', 'Сохранить')) . '</button>';
+        echo '</div>';
+        echo '</form>';
+
+        echo '<div class="branding-slots">';
+        foreach (self::brandingSlots() as $slot => $slotMeta) {
+            $isCustom = self::brandingCustomPath($slot) !== null;
+            $label = self::brandingSlotLabel($slot);
+            $target = (string)($slotMeta['target'] ?? '');
+            $customLabel = Util::h(self::t('settings.brandingCustom', 'своя'));
+            $stockLabel = Util::h(self::t('settings.brandingStock', 'стандартная'));
+
+            // Один слот — одна форма: кнопки «Загрузить»/«Сбросить» отправляют
+            // только нажатую (name="action" живёт на кнопке, не в скрытом поле).
+            echo '<form method="post" enctype="multipart/form-data" action="/admin/settings?tab=customization" class="branding-slot">';
+            echo '<input type="hidden" name="slot" value="' . Util::h($slot) . '">';
+            echo '<input type="hidden" name="csrf" value="' . Util::h(Csrf::token()) . '">';
+            echo '<div class="branding-slot-head">';
+            echo '<div class="branding-slot-preview"><img src="' . Util::h(self::brandingUrl($slot)) . '" alt="' . Util::h($label) . '" loading="lazy"></div>';
+            echo '<div class="branding-slot-info">';
+            echo '<div class="branding-slot-title">' . Util::h($label) . '</div>';
+            echo '<div class="branding-slot-meta">' . Util::h(self::brandingSlotMeta($slot)) . ' · <span class="pill ' . ($isCustom ? 'success' : '') . '">' . ($isCustom ? $customLabel : $stockLabel) . '</span></div>';
+            echo '</div>';
+            echo '</div>';
+            if ($target !== '') {
+                echo '<p class="field-hint">' . Util::h(sprintf(self::t('settings.brandingTargetPrefix', 'Оптимальный размер %s.'), str_replace('x', '×', $target)) . ' ' . self::t('settings.brandingTargetHint', 'Не квадратное изображение браузер обрежет по центру, крупное — уменьшит автоматически (если включён JavaScript).')) . '</p>';
+            }
+            echo '<input type="file" name="branding_file" accept=".png,.svg,image/png,image/svg+xml"' . ($target !== '' ? ' data-branding-target="' . Util::h($target) . '"' : '') . '>';
+            echo '<div class="branding-slot-actions">';
+            echo '<button type="submit" class="primary" name="action" value="save_branding">' . Util::h(self::t('settings.brandingUpload', 'Загрузить')) . '</button>';
+            if ($isCustom) {
+                echo '<button type="submit" name="action" value="reset_branding">' . Util::h(self::t('settings.brandingReset', 'Вернуть стандартную')) . '</button>';
+            }
+            echo '</div>';
+            echo '</form>';
+        }
+        echo '</div>';
+        echo '</section>';
+    }
+
     private static function portalUpdatePanel(array $status, ?array $updateResult = null): void
     {
         $current = is_array($status['current'] ?? null) ? $status['current'] : [];
@@ -512,7 +597,7 @@ trait AppPagesTrait
         }
 
         self::layout(self::t('login.title', 'Вход'), function () use ($error) {
-            echo '<section class="login-visual"><div><img src="/assets/logo-sesameportal-inverse.svg" alt="Портал Артел МиК"><p>' . self::t('login.subtitle', 'Портал видеонаблюдения SesameWare') . '</p></div>';
+            echo '<section class="login-visual"><div><img src="' . Util::h(self::brandingUrl('logo')) . '" alt="' . Util::h(self::appName()) . '"><p>' . self::t('login.subtitle', 'Портал видеонаблюдения SesameWare') . '</p></div>';
             echo '<div class="login-features"><span>' . Util::h(self::t('login.feature.secure', 'Безопасно')) . '</span><span>' . Util::h(self::t('login.feature.reliable', 'Надежно')) . '</span><span>' . Util::h(self::t('login.feature.efficient', 'Производительно')) . '</span></div></section>';
             echo '<section class="login-panel login-card">';
             if ($error) {

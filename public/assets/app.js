@@ -1460,11 +1460,11 @@ document.addEventListener('click', function (e) {
   window.location.href = row.getAttribute('data-href');
 });
 
-/* Tab switcher for group edit page */
+/* Tab switcher: generic for any container marked with [data-tabset] */
 document.addEventListener('click', function (e) {
   var btn = e.target.closest('.tab-btn');
   if (!btn) return;
-  var tabs = btn.closest('.group-edit-tabs');
+  var tabs = btn.closest('.group-edit-tabs, [data-tabset]');
   if (!tabs) return;
   var tabId = btn.getAttribute('data-tab');
   tabs.querySelectorAll('.tab-btn').forEach(function (b) { b.classList.toggle('active', b === btn); });
@@ -1476,6 +1476,101 @@ document.addEventListener('click', function (e) {
   url.searchParams.set('tab', tabId);
   history.replaceState(null, '', url);
 });
+
+/* Branding: подгонка загружаемого PNG под целевой размер слота прямо в браузере
+   (обрезка по центру, только уменьшение — GD на сервере нет). SVG пропускаем. */
+document.addEventListener('change', function (e) {
+  var input = e.target;
+  if (!input.matches || !input.matches('input[type="file"][data-branding-target]')) return;
+  var file = input.files && input.files[0];
+  if (!file) return;
+  if (file.type !== 'image/png' && !/\.png$/i.test(file.name)) return;
+
+  var m = /^(\d+)x(\d+)$/.exec(input.getAttribute('data-branding-target') || '');
+  if (!m) return;
+  var targetW = parseInt(m[1], 10);
+  var targetH = parseInt(m[2], 10);
+
+  var url = URL.createObjectURL(file);
+  var img = new Image();
+  img.onload = function () {
+    URL.revokeObjectURL(url);
+    var sw = img.naturalWidth;
+    var sh = img.naturalHeight;
+    if (!sw || !sh) return;
+
+    // cover: прямоугольник нужной пропорции, вписанный в исходник (обрезка по центру)
+    var cropW = Math.min(sw, sh * (targetW / targetH));
+    var cropH = Math.min(sh, sw * (targetH / targetW));
+    var scale = Math.min(1, targetW / cropW, targetH / cropH);
+    var outW = Math.max(1, Math.round(cropW * scale));
+    var outH = Math.max(1, Math.round(cropH * scale));
+    var cropX = Math.floor((sw - cropW) / 2);
+    var cropY = Math.floor((sh - cropH) / 2);
+
+    if (outW === sw && outH === sh) return; // уже готово — файл не переписываем
+
+    var canvas = brandingShrink(img, cropX, cropY, Math.round(cropW), Math.round(cropH), outW, outH);
+    canvas.toBlob(function (blob) {
+      if (!blob) return;
+      brandingSetFile(input, blob, file.name.replace(/\.png$/i, '') + '.png');
+    }, 'image/png');
+  };
+  img.onerror = function () { URL.revokeObjectURL(url); };
+  img.src = url;
+});
+
+/* Пошаговое уменьшение: деление пополам вместо одного резкого скейла сохраняет
+   детализацию при большой разнице размеров (например, 4000×4000 → 512×512). */
+function brandingShrink(img, cropX, cropY, cropW, cropH, outW, outH) {
+  var level = { canvas: null, x: cropX, y: cropY, w: cropW, h: cropH };
+  while (Math.floor(level.w / 2) >= outW && Math.floor(level.h / 2) >= outH) {
+    var next = document.createElement('canvas');
+    next.width = Math.floor(level.w / 2);
+    next.height = Math.floor(level.h / 2);
+    var ctx = next.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    if (level.canvas) {
+      ctx.drawImage(level.canvas, 0, 0, level.w, level.h, 0, 0, next.width, next.height);
+    } else {
+      ctx.drawImage(img, level.x, level.y, level.w, level.h, 0, 0, next.width, next.height);
+    }
+    level = { canvas: next, x: 0, y: 0, w: next.width, h: next.height };
+  }
+
+  var out = document.createElement('canvas');
+  out.width = outW;
+  out.height = outH;
+  var octx = out.getContext('2d');
+  octx.imageSmoothingEnabled = true;
+  octx.imageSmoothingQuality = 'high';
+  if (level.canvas) {
+    octx.drawImage(level.canvas, 0, 0, level.w, level.h, 0, 0, outW, outH);
+  } else {
+    octx.drawImage(img, level.x, level.y, level.w, level.h, 0, 0, outW, outH);
+  }
+  return out;
+}
+
+/* Подмена файла в input до отправки формы + превью результата */
+function brandingSetFile(input, blob, filename) {
+  try {
+    var data = new DataTransfer();
+    data.items.add(new File([blob], filename, { type: 'image/png' }));
+    input.files = data.files;
+  } catch (err) {
+    return; // без DataTransfer отправим исходный файл, сервер его тоже примет
+  }
+  var slot = input.closest('.branding-slot');
+  var preview = slot && slot.querySelector('.branding-slot-preview img');
+  if (preview) {
+    if (preview.dataset.brandingBlob) URL.revokeObjectURL(preview.dataset.brandingBlob);
+    var objectUrl = URL.createObjectURL(blob);
+    preview.src = objectUrl;
+    preview.dataset.brandingBlob = objectUrl;
+  }
+}
 
 /* Folder expand/collapse in group edit — show cameras list */
 document.addEventListener('click', function (e) {

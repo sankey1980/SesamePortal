@@ -384,6 +384,107 @@ map_save_status="$(
 )"
 test "$map_save_status" = "200"
 php -r 'require getenv("ROOT")."/app/Portal.php"; echo \SesamePortal\DB::setting("map_provider","");' | grep -q "yandex"
+
+# Settings: две вкладки — «Основные» и «Кастомизация» (обе отдаются сервером).
+printf "%s" "$settings_page" | grep -q 'data-tabset'
+printf "%s" "$settings_page" | grep -q 'data-tab="general"'
+printf "%s" "$settings_page" | grep -q 'data-tab="customization"'
+printf "%s" "$settings_page" | grep -q 'data-tab-panel="general"'
+printf "%s" "$settings_page" | grep -q 'data-tab-panel="customization"[^>]*hidden'
+custom_tab_page="$(curl -fsS -b "$COOKIE_JAR" "http://127.0.0.1:$PORT/admin/settings?tab=customization&lang=ru")"
+printf "%s" "$custom_tab_page" | grep -q 'data-tab-panel="general"[^>]*hidden'
+! printf "%s" "$custom_tab_page" | grep -q 'data-tab-panel="customization"[^>]*hidden'
+branding_slots="$(printf "%s" "$custom_tab_page" | grep -o 'class="branding-slot"' | wc -l)"
+test "$branding_slots" = "6"
+printf "%s" "$custom_tab_page" | grep -q 'name="action" value="save_branding_name"'
+printf "%s" "$custom_tab_page" | grep -q 'name="action" value="save_branding"'
+printf "%s" "$custom_tab_page" | grep -q 'action="/admin/settings?tab=customization"'
+printf "%s" "$custom_tab_page" | grep -q 'data-branding-target="512x512"'
+
+# Название приложения: сохраняется в настройки и попадает в заголовок и манифест.
+branding_name_response="$(
+  curl -sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
+    -d "csrf=$settings_csrf" -d "action=save_branding_name" -d "branding_app_name=Smoke Brand Portal" \
+    "http://127.0.0.1:$PORT/admin/settings?tab=customization"
+)"
+printf "%s" "$branding_name_response" | grep -q "Название приложения сохранено"
+printf "%s" "$branding_name_response" | grep -q " - Smoke Brand Portal</title>"
+php -r 'require getenv("ROOT")."/app/Portal.php"; echo \SesamePortal\DB::setting("branding_app_name","");' | grep -q "Smoke Brand Portal"
+manifest_response="$(curl -fsS "http://127.0.0.1:$PORT/manifest.json")"
+printf "%s" "$manifest_response" | grep -q '"name":"Smoke Brand Portal"'
+printf "%s" "$manifest_response" | grep -q '"sizes":"512x512"'
+
+# Своя иконка: сервер принимает PNG (ресайз по центру делает браузер), отдаёт по /branding/.
+php -r '
+[$_, $file] = $argv + [null, null];
+$raw = "";
+for ($y = 0; $y < 600; $y++) { $raw .= "\x00" . str_repeat("\x33\x66\x99", 600); }
+$chunk = function (string $type, string $data): string {
+    return pack("N", strlen($data)) . $type . $data . pack("N", crc32($type . $data));
+};
+file_put_contents($file, "\x89PNG\r\n\x1a\n"
+    . $chunk("IHDR", pack("NNCCCCC", 600, 600, 8, 2, 0, 0, 0))
+    . $chunk("IDAT", gzcompress($raw, 9))
+    . $chunk("IEND", ""));
+' "$STATE_DIR/branding-icon.png"
+branding_upload_response="$(
+  curl -sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
+    -F "csrf=$settings_csrf" -F "slot=icon-512" -F "action=save_branding" \
+    -F "branding_file=@$STATE_DIR/branding-icon.png;type=image/png" \
+    "http://127.0.0.1:$PORT/admin/settings?tab=customization"
+)"
+printf "%s" "$branding_upload_response" | grep -q "обновлено (600×600)"
+printf "%s" "$branding_upload_response" | grep -q "своя"
+branding_headers="$(curl -sS -D - -o "$STATE_DIR/branding-served.png" "http://127.0.0.1:$PORT/branding/icon-512.png")"
+printf "%s" "$branding_headers" | grep -qi "content-type: image/png"
+printf "%s" "$branding_headers" | grep -qi "x-content-type-options: nosniff"
+cmp -s "$STATE_DIR/branding-icon.png" "$STATE_DIR/branding-served.png"
+curl -fsS "http://127.0.0.1:$PORT/manifest.json" | grep -q "/branding/icon-512.png"
+
+# Отказы: текстовый файл, SVG со скриптом, неизвестный слот, загрузка без CSRF.
+printf '%s' "definitely not an image" > "$STATE_DIR/not-image.txt"
+branding_reject="$(
+  curl -sS -b "$COOKIE_JAR" \
+    -F "csrf=$settings_csrf" -F "slot=icon-192" -F "action=save_branding" \
+    -F "branding_file=@$STATE_DIR/not-image.txt;type=text/plain" \
+    "http://127.0.0.1:$PORT/admin/settings?tab=customization"
+)"
+printf "%s" "$branding_reject" | grep -q "Нужен PNG или SVG"
+printf '%s' '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>alert(2)</script></svg>' > "$STATE_DIR/evil.svg"
+branding_evil="$(
+  curl -sS -b "$COOKIE_JAR" \
+    -F "csrf=$settings_csrf" -F "slot=favicon" -F "action=save_branding" \
+    -F "branding_file=@$STATE_DIR/evil.svg;type=image/svg+xml" \
+    "http://127.0.0.1:$PORT/admin/settings?tab=customization"
+)"
+printf "%s" "$branding_evil" | grep -q "SVG отклонён"
+test ! -f "$STATE_DIR/branding/favicon.svg"
+test ! -f "$STATE_DIR/branding/icon-192.png"
+branding_bad_slot="$(
+  curl -sS -b "$COOKIE_JAR" \
+    -F "csrf=$settings_csrf" -F "slot=../etc/passwd" -F "action=save_branding" \
+    -F "branding_file=@$STATE_DIR/branding-icon.png;type=image/png" \
+    "http://127.0.0.1:$PORT/admin/settings?tab=customization"
+)"
+printf "%s" "$branding_bad_slot" | grep -q "Неизвестный слот"
+branding_nocsrf="$(
+  curl -sS -o /dev/null -w '%{http_code}' -b "$COOKIE_JAR" \
+    -F "slot=icon-512" -F "action=save_branding" \
+    -F "branding_file=@$STATE_DIR/branding-icon.png;type=image/png" \
+    "http://127.0.0.1:$PORT/admin/settings?tab=customization"
+)"
+test "$branding_nocsrf" = "419"
+
+# Сброс слота возвращает стоковую иконку.
+branding_reset="$(
+  curl -sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
+    -d "csrf=$settings_csrf" -d "slot=icon-512" -d "action=reset_branding" \
+    "http://127.0.0.1:$PORT/admin/settings?tab=customization"
+)"
+printf "%s" "$branding_reset" | grep -q "возвращена стандартная иконка"
+test ! -f "$STATE_DIR/branding/icon-512.png"
+curl -fsS "http://127.0.0.1:$PORT/manifest.json" | grep -q '"src":"/assets/icon-512.png?v='
+
 admin_users_page="$(curl -fsS -b "$COOKIE_JAR" "http://127.0.0.1:$PORT/admin/users?q=admin&lang=ru")"
 printf "%s" "$admin_users_page" | grep -q "admin"
 printf "%s" "$admin_users_page" | grep -q "Статический токен"

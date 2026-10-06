@@ -29,5 +29,6 @@ require_once __DIR__ . '/Traits/AppDataTrait.php';
 require_once __DIR__ . '/Traits/AppOpenApiSpecTrait.php';
 require_once __DIR__ . '/Traits/AppOpenApiSchemasTrait.php';
 require_once __DIR__ . '/Traits/AppOpenApiPathsTrait.php';
+require_once __DIR__ . '/Traits/AppBrandingTrait.php';
 require_once __DIR__ . '/App.php';
 require_once __DIR__ . '/Cli.php';

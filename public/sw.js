@@ -1,8 +1,8 @@
-var CACHE = 'artelmik-v3';
+var CACHE = 'artelmik-v4';
 var STATIC_ASSETS = [
   '/assets/styles.css',
   '/assets/app.js',
-  '/assets/favicon.svg',
+  '/branding/favicon',
   '/manifest.json'
 ];
 
@@ -35,7 +35,7 @@ self.addEventListener('fetch', function (e) {
     return;
   }
 
-  if (url.pathname.startsWith('/assets/') || url.pathname === '/manifest.json') {
+  if (url.pathname.startsWith('/assets/') || url.pathname.startsWith('/branding/') || url.pathname === '/manifest.json') {
     e.respondWith(
       fetch(e.request).then(function (resp) {
         if (resp && resp.status === 200) {

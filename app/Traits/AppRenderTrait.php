@@ -20,14 +20,14 @@ trait AppRenderTrait
         if ($user && $showChrome && $theme === '') {
             echo '<script>if(!document.documentElement.dataset.theme&&window.matchMedia){document.documentElement.dataset.theme=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.themeAuto="1";}</script>';
         }
-        echo '<title>' . Util::h($title) . ' - Портал Артел МиК</title>';
-        echo '<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">';
-        echo '<link rel="manifest" href="/manifest.json">';
-        echo '<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">';
+        echo '<title>' . Util::h($title) . ' - ' . Util::h(self::appName()) . '</title>';
+        echo '<link rel="icon" href="' . Util::h(self::brandingUrl('favicon')) . '" type="' . Util::h(self::brandingType('favicon')) . '">';
+        echo '<link rel="manifest" href="/manifest.json?v=' . Util::h(self::manifestVersion()) . '">';
+        echo '<link rel="apple-touch-icon" href="' . Util::h(self::brandingUrl('apple-touch-icon')) . '" type="' . Util::h(self::brandingType('apple-touch-icon')) . '">';
         echo '<meta name="theme-color" content="#161616">';
         echo '<meta name="apple-mobile-web-app-capable" content="yes">';
         echo '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">';
-        echo '<meta name="apple-mobile-web-app-title" content="Портал Артел МиК">';
+        echo '<meta name="apple-mobile-web-app-title" content="' . Util::h(self::appName()) . '">';
         echo '<meta name="mobile-web-app-capable" content="yes">';
         echo '<link rel="stylesheet" href="' . Util::h(self::assetUrl('/assets/styles.css')) . '">';
         echo '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">';
@@ -38,7 +38,7 @@ trait AppRenderTrait
         echo '</head><body' . ($bodyClass !== '' ? ' class="' . Util::h($bodyClass) . '"' : '') . '>';
         if ($user && $showChrome) {
             echo '<div class="shell"><aside class="sidebar">';
-            echo '<a class="brand-logo-link" href="/"><img class="brand-logo-full" src="/assets/logo-sesameportal-inverse.svg" alt="Портал Артел МиК"></a>';
+            echo '<a class="brand-logo-link" href="/"><img class="brand-logo-full" src="' . Util::h(self::brandingUrl('logo')) . '" alt="' . Util::h(self::appName()) . '"></a>';
             echo '<div class="nav-section">' . Util::h(self::t('nav.section.view', 'Просмотр')) . '</div><nav class="nav">';
             $viewerFilter = (string)($_GET['filter'] ?? 'all');
             self::navLink('/', self::t('nav.cameras', 'Камеры'), 'grid', Util::path() === '/' && $viewerFilter !== 'favorites');
@@ -96,7 +96,8 @@ trait AppRenderTrait
 
     private static function assetUrl(string $path): string
     {
-        $file = dirname(__DIR__) . '/public' . $path;
+        // __DIR__ — app/Traits, поэтому до корня проекта два уровня вверх.
+        $file = dirname(__DIR__, 2) . '/public' . $path;
         if (!is_file($file)) {
             return $path;
         }
@@ -387,23 +388,31 @@ trait AppRenderTrait
     }
 
     /**
+     * Навигация по вкладкам: $tabs — пары [id, подпись], $active — id активной.
+     * Работает вместе с обработчиком в app.js (контейнер с [data-tabset]).
+     */
+    private static function tabNav(array $tabs, string $active): void
+    {
+        echo '<nav class="tab-nav" role="tablist">';
+        foreach ($tabs as [$id, $label]) {
+            $isActive = (string)$id === $active;
+            echo '<button type="button" class="tab-btn' . ($isActive ? ' active' : '') . '" data-tab="' . Util::h($id) . '" role="tab" aria-selected="' . ($isActive ? 'true' : 'false') . '">' . Util::h($label) . '</button>';
+        }
+        echo '</nav>';
+    }
+
+    /**
      * Навигация по вкладкам редактирования группы.
      * tab=1: Настройки, tab=2: Папки и камеры, tab=3: Пользователи.
      * Если группа не задана (новая) — показать только вкладку «Настройки» без навигации.
      */
     private static function groupEditTabNav(int $activeTab, int $folderCount, int $userCount): void
     {
-        echo '<nav class="tab-nav" role="tablist">';
-        $tabs = [
+        self::tabNav([
             [1, self::t('groups.tabSettings', 'Настройки')],
             [2, self::t('groups.tabFolders', 'Папки и камеры') . ' (' . $folderCount . ')'],
             [3, self::t('groups.tabUsers', 'Пользователи') . ' (' . $userCount . ')'],
-        ];
-        foreach ($tabs as [$id, $label]) {
-            $active = $id === $activeTab ? ' active' : '';
-            echo '<button type="button" class="tab-btn' . $active . '" data-tab="' . $id . '" role="tab" aria-selected="' . ($id === $activeTab ? 'true' : 'false') . '">' . Util::h($label) . '</button>';
-        }
-        echo '</nav>';
+        ], (string)$activeTab);
     }
 
     /**

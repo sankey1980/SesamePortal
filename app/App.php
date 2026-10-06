@@ -15,6 +15,7 @@ final class App
     use AppOpenApiSpecTrait;
     use AppOpenApiSchemasTrait;
     use AppOpenApiPathsTrait;
+    use AppBrandingTrait;
     use VideoWallPages;
 
     private static function t(string $key, string $fallback): string
@@ -42,6 +43,16 @@ final class App
         }
         if ($path === '/docs.html' || $path === '/api/docs') {
             self::openApiDocsPage();
+            return;
+        }
+
+        // Бренд-ассеты: публичны, т.к. нужны на экране входа и при установке PWA.
+        if (str_starts_with($path, '/branding/')) {
+            self::brandingAsset(substr($path, strlen('/branding/')));
+            return;
+        }
+        if ($path === '/manifest.json') {
+            self::manifestJsonResponse();
             return;
         }
 
